@@ -8,6 +8,7 @@ L'outil lit un catalogue AMIPI, une FDC de reference et un ou plusieurs exports 
 
 - Lecture des exports `.xlsx` multi-onglets.
 - Generation d'un onglet de coupe par onglet source.
+- Generation d'un onglet d'epissures associe a chaque onglet de coupe.
 - Support des exports `.csv` mono-feuille.
 - Priorisation des references AMIPI `IR T2 SPB` pour les sections `>= 0,5 mm²`.
 - Conservation du style de la FDC modele.
@@ -65,6 +66,15 @@ Verifier la syntaxe du CLI :
 
 ```bash
 npm run check
+```
+
+Verifier le workflow Logics :
+
+```bash
+npm run logics:status
+npm run logics:health
+npm run logics:lint
+npm run logics:audit
 ```
 
 ## Entrees
@@ -132,6 +142,44 @@ out/Fdc_generated_<nom-export>.xlsx
 ```
 
 Si un export source contient plusieurs onglets, le fichier FDC genere contient un onglet de coupe par onglet source.
+
+Chaque onglet de coupe a aussi un onglet associe `<nom-onglet> Epissures`. Ces onglets listent les epissures detectees depuis les colonnes `Begin ID` et `End ID` sous forme de tables 5 colonnes :
+
+- la colonne 1 numerote les fils du cote gauche de l'epissure ;
+- la colonne 2 contient les fils dont l'epissure est dans `End ID` ;
+- la colonne 3 contient la cellule centrale noire de l'epissure ;
+- la colonne 4 numerote les fils du cote droit de l'epissure ;
+- la colonne 5 contient les fils dont l'epissure est dans `Begin ID` ;
+- les fils d'une meme epissure sont regroupes sous un titre fusionne, centre et en gras ;
+- deux lignes vides separent les tables d'epissures.
+
+Les traits de liaison sont rendus avec des bordures Excel autour des cellules, car le generateur `exceljs` utilise ici un format de classeur sans insertion de formes de ligne arbitraires.
+
+## Workflow Logics
+
+Le dossier `logics/` contient les demandes, backlog items et taches de livraison du projet.
+
+Structure principale :
+
+```text
+logics/
+├── request/
+├── backlog/
+├── tasks/
+├── specs/
+├── product/
+├── architecture/
+├── external/
+└── instructions.md
+```
+
+La feature en cours pour les pages d'epissures est suivie par :
+
+- `logics/request/req_000_pages_epissures_sorties_fdc.md`
+- `logics/backlog/item_001_ajouter_des_pages_epissures_aux_sorties_fdc.md`
+- `logics/tasks/task_001_ajouter_des_pages_epissures_aux_sorties_fdc.md`
+
+Utiliser `logics-manager` pour creer, promouvoir, auditer et fermer les documents de workflow. Les raccourcis `npm run logics:*` couvrent les controles courants.
 
 ## Regles de resolution cable
 

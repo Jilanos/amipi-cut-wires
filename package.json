@@ -11,7 +11,11 @@
     "build": "node src/amipi-cut-wires.mjs build",
     "catalog": "node src/amipi-cut-wires.mjs catalog",
     "cut-sheet": "node src/amipi-cut-wires.mjs cut-sheet",
-    "check": "node --check src/amipi-cut-wires.mjs"
+    "check": "node --check src/amipi-cut-wires.mjs",
+    "logics:status": "logics-manager status",
+    "logics:health": "logics-manager health",
+    "logics:lint": "logics-manager lint",
+    "logics:audit": "logics-manager audit --group-by-doc"
   },
   "dependencies": {
     "exceljs": "^4.4.0"

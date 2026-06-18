@@ -1065,6 +1065,142 @@ function clearAndFillCutSheetWorksheet(worksheet, resolutions) {
   };
 }
 
+function getWireLabel(wire) {
+  const technicalId = normalizeText(wire["Technical ID"]);
+  return technicalId.length > 0 ? technicalId : normalizeText(wire.Name);
+}
+
+function addSpliceWire(splices, spliceId, side, label) {
+  const normalizedSpliceId = normalizeText(spliceId);
+  if (normalizedSpliceId.length === 0 || label.length === 0) {
+    return;
+  }
+  const splice = splices.get(normalizedSpliceId) ?? {
+    id: normalizedSpliceId,
+    left: [],
+    right: []
+  };
+  splice[side].push(label);
+  splices.set(normalizedSpliceId, splice);
+}
+
+function collectSpliceTables(resolutions) {
+  const splices = new Map();
+  for (const resolution of resolutions) {
+    const wire = resolution.wire;
+    const label = getWireLabel(wire);
+    if (isSpliceEndpoint(wire["End ID"])) {
+      addSpliceWire(splices, wire["End ID"], "left", label);
+    }
+    if (isSpliceEndpoint(wire["Begin ID"])) {
+      addSpliceWire(splices, wire["Begin ID"], "right", label);
+    }
+  }
+  return [...splices.values()].sort((first, second) => first.id.localeCompare(second.id));
+}
+
+const EPISSURE_TABLE_BORDER = {
+  top: { style: "thin" },
+  left: { style: "thin" },
+  bottom: { style: "thin" },
+  right: { style: "thin" }
+};
+
+const EPISSURE_CONNECTOR_BORDER = {
+  style: "medium",
+  color: { argb: "FF000000" }
+};
+
+const EPISSURE_CENTER_FILL = {
+  type: "pattern",
+  pattern: "solid",
+  fgColor: { argb: "FF000000" }
+};
+
+function styleEpissureTableRow(row) {
+  for (let column = 1; column <= 5; column += 1) {
+    const cell = row.getCell(column);
+    cell.border = cloneJson(EPISSURE_TABLE_BORDER);
+    cell.alignment = { vertical: "middle" };
+    cell.font = makeCalibriFont(cell.font ?? {});
+  }
+}
+
+function setConnectorBorder(cell, side) {
+  cell.border = {
+    ...(cell.border ?? {}),
+    [side]: cloneJson(EPISSURE_CONNECTOR_BORDER)
+  };
+}
+
+function applyLeftConnector(row) {
+  setConnectorBorder(row.getCell(1), "right");
+  setConnectorBorder(row.getCell(2), "bottom");
+  setConnectorBorder(row.getCell(3), "left");
+}
+
+function applyRightConnector(row) {
+  setConnectorBorder(row.getCell(3), "right");
+  setConnectorBorder(row.getCell(4), "left");
+  setConnectorBorder(row.getCell(4), "right");
+}
+
+function fillEpissureCenterCell(row) {
+  const centerCell = row.getCell(3);
+  centerCell.value = null;
+  centerCell.fill = cloneJson(EPISSURE_CENTER_FILL);
+}
+
+function writeEpissureWorksheet(workbook, cutSheetName, resolutions) {
+  const worksheet = workbook.addWorksheet(makeUniqueWorksheetName(workbook, `${cutSheetName} Epissures`));
+  worksheet.columns = [
+    { width: 4 },
+    { width: 28 },
+    { width: 10 },
+    { width: 4 },
+    { width: 28 }
+  ];
+
+  const spliceTables = collectSpliceTables(resolutions);
+  let rowNumber = 1;
+  for (const splice of spliceTables) {
+    const titleRow = worksheet.getRow(rowNumber);
+    worksheet.mergeCells(rowNumber, 1, rowNumber, 5);
+    const titleCell = titleRow.getCell(1);
+    titleCell.value = splice.id;
+    styleEpissureTableRow(titleRow);
+    titleCell.font = { ...makeCalibriFont(titleCell.font ?? {}), bold: true };
+    titleCell.alignment = { horizontal: "center", vertical: "middle" };
+
+    const rowCount = Math.max(splice.left.length, splice.right.length, 1);
+    const centerRowNumber = rowNumber + Math.ceil(rowCount / 2);
+    for (let index = 0; index < rowCount; index += 1) {
+      const row = worksheet.getRow(rowNumber + index + 1);
+      const leftWire = splice.left[index];
+      const rightWire = splice.right[index];
+      row.getCell(1).value = leftWire === undefined ? "" : index + 1;
+      row.getCell(2).value = leftWire ?? "";
+      row.getCell(4).value = rightWire === undefined ? "" : index + 1;
+      row.getCell(5).value = rightWire ?? "";
+      styleEpissureTableRow(row);
+      row.getCell(1).alignment = { horizontal: "center", vertical: "middle" };
+      row.getCell(4).alignment = { horizontal: "center", vertical: "middle" };
+      if (leftWire !== undefined) {
+        applyLeftConnector(row);
+      }
+      if (rightWire !== undefined) {
+        applyRightConnector(row);
+      }
+      if (row.number === centerRowNumber) {
+        fillEpissureCenterCell(row);
+      }
+    }
+
+    rowNumber += rowCount + 3;
+  }
+  return worksheet;
+}
+
 async function writeCutSheetWorkbook(ExcelJS, templatePath, outputPath, sheetResolutions) {
   const workbook = await readWorkbook(ExcelJS, templatePath);
   const spliceWorksheet = workbook.getWorksheet("Epissures");
@@ -1092,6 +1228,7 @@ async function writeCutSheetWorkbook(ExcelJS, templatePath, outputPath, sheetRes
 
   outputWorksheets.forEach(({ worksheet, resolutions }) => {
     clearAndFillCutSheetWorksheet(worksheet, resolutions);
+    writeEpissureWorksheet(workbook, worksheet.name, resolutions);
   });
   ensureDirectory(path.dirname(outputPath));
   await workbook.xlsx.writeFile(outputPath);
