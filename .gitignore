@@ -1,0 +1,19 @@
+node_modules/
+npm-debug.log*
+
+# Generated artifacts
+data/*
+reports/*
+out/*
+!data/.gitkeep
+!reports/.gitkeep
+!out/.gitkeep
+
+# OS/editor noise
+.agents/
+.DS_Store
+Thumbs.db
+*.tmp
+*.log
+*:Zone.Identifier
+~$*

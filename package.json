@@ -1,0 +1,22 @@
+{
+  "name": "amipi-cut-wires",
+  "version": "0.1.0",
+  "description": "Generate AMIPI cut sheets from wire-by-wire Excel exports.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "amipi-cut-wires": "src/amipi-cut-wires.mjs"
+  },
+  "scripts": {
+    "build": "node src/amipi-cut-wires.mjs build",
+    "catalog": "node src/amipi-cut-wires.mjs catalog",
+    "cut-sheet": "node src/amipi-cut-wires.mjs cut-sheet",
+    "check": "node --check src/amipi-cut-wires.mjs"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
