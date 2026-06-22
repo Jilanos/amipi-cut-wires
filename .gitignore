@@ -2,12 +2,8 @@ node_modules/
 npm-debug.log*
 
 # Generated artifacts
-data/*
-reports/*
-out/*
-!data/.gitkeep
-!reports/.gitkeep
-!out/.gitkeep
+OUT/*
+!OUT/.gitkeep
 
 # OS/editor noise
 .agents/

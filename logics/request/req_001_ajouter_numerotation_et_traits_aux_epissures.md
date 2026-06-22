@@ -2,8 +2,8 @@
 > From version: 0.1.0
 > Schema version: 1.0
 > Status: Done
-> Understanding: 90%
-> Confidence: 85%
+> Understanding: 92
+> Confidence: 86
 > Complexity: Medium
 > Theme: Operator workflow
 > Reminder: Update status/understanding/confidence and linked backlog/task references when you edit this doc.
@@ -48,7 +48,7 @@ flowchart TD
 - AC5: The central splice cell in column 3 is filled solid black and placed around the midpoint of the side with the most wires.
 - AC6: Visual connection lines are added from each numbered left-side row toward the center of the black splice cell.
 - AC7: Visual connection lines are added from each numbered right-side row toward the center of the black splice cell.
-- AC8: Existing grouping by splice ID and left/right assignment from `End ID`/`Begin ID` remains unchanged.
+- AC8: Existing grouping by splice ID and left/right assignment from `End ID`/`Begin ID` remains unchanged. (SUPERSEDED by `req_002`: left/right is now assigned from the splice-endpoint pin `L`/`R`; grouping by splice ID is unchanged.)
 - AC9: The workbook opens in Excel/LibreOffice and the epissures worksheet layout is visible.
 - AC10: Documentation or implementation notes explain any limitation or workaround used for Excel line rendering.
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,12 +11,12 @@ const ROOT = path.resolve(__dirname, "..");
 const FALLBACK_APP_ROOT = path.resolve(ROOT, "../electrical-plan-editor");
 
 const DEFAULTS = {
-  amipiWorkbook: path.join(ROOT, "inputs", "amipi", "Liste cables AMIPI.xlsx"),
-  templateWorkbook: path.join(ROOT, "inputs", "templates", "Fdc_CI1250507 Principal CIRCLE.xlsx"),
-  exportDirectory: path.join(ROOT, "examples", "exports"),
-  dataDirectory: path.join(ROOT, "data"),
-  reportDirectory: path.join(ROOT, "reports"),
-  outputDirectory: path.join(ROOT, "out")
+  amipiWorkbook: path.join(ROOT, "data", "Liste cables AMIPI.xlsx"),
+  templateWorkbook: path.join(ROOT, "data", "Fdc_CI1250507 Principal CIRCLE.xlsx"),
+  exportDirectory: path.join(ROOT, "IN"),
+  dataDirectory: path.join(ROOT, "OUT"),
+  reportDirectory: path.join(ROOT, "OUT"),
+  outputDirectory: path.join(ROOT, "OUT")
 };
 
 const APP_TO_AMIPI_COLOR = new Map([
@@ -66,6 +66,31 @@ const AMIPI_TO_FDC_COLOR = new Map([
   ["JN", "JA"],
   ["MR", "MA"]
 ]);
+
+const FDC_COLOR_CELL_STYLES = new Map([
+  ["NO", { fill: "FF000000", font: "FFFFFFFF" }],
+  ["RG", { fill: "FFFF0000", font: "FFFFFFFF" }],
+  ["VE", { fill: "FF00B050", font: "FFFFFFFF" }],
+  ["JA", { fill: "FFFFFF00", font: "FF000000" }],
+  ["BE", { fill: "FF0070C0", font: "FFFFFFFF" }],
+  ["MA", { fill: "FF8B4513", font: "FFFFFFFF" }],
+  ["OR", { fill: "FFFFC000", font: "FF000000" }],
+  ["VI", { fill: "FF7030A0", font: "FFFFFFFF" }],
+  ["BA", { fill: "FFFFFFFF", font: "FF000000" }],
+  ["RS", { fill: "FFFF99CC", font: "FF000000" }],
+  ["GR", { fill: "FFBFBFBF", font: "FF000000" }]
+]);
+
+const FDC_TWIST_FILL = {
+  type: "pattern",
+  pattern: "solid",
+  fgColor: { argb: "FFFFFF00" }
+};
+
+const FDC_CELL_BORDER = {
+  style: "thin",
+  color: { argb: "FF000000" }
+};
 
 const SPLICE_ACCESSORY_LABEL = "PREDEN 13MM";
 
@@ -288,6 +313,31 @@ function formatFdcColor(colorCode) {
     .join("/");
 }
 
+function getFdcColorCellStyle(colorText) {
+  const firstColorCode = normalizeText(colorText).toUpperCase().split("/").find(Boolean);
+  return firstColorCode === undefined ? undefined : FDC_COLOR_CELL_STYLES.get(firstColorCode);
+}
+
+function applyFdcColorCellStyle(cell, colorText) {
+  const colorStyle = getFdcColorCellStyle(colorText);
+  if (colorStyle === undefined) {
+    return;
+  }
+
+  cell.style = {
+    ...cloneCellStyleObject(cell),
+    fill: {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: colorStyle.fill }
+    },
+    font: {
+      ...(cell.font ?? {}),
+      color: { argb: colorStyle.font }
+    }
+  };
+}
+
 function parseCsvRows(text) {
   const rows = [];
   let row = [];
@@ -385,8 +435,13 @@ function normalizePin(value) {
   return cavity === null ? text : cavity[1];
 }
 
+// A splice endpoint ID carries its tag as a dash-delimited segment followed by a
+// number: `EP` (e.g. LAT-EP-01), `S` (e.g. PRI-S-01 or bare S-001), or `E`
+// (e.g. PRI-E-01). Connectors use the `C` tag and must not match.
+const SPLICE_ENDPOINT_PATTERN = /(?:^|[-_\s])(?:EP|S|E)[-_]\d/i;
+
 function isSpliceEndpoint(value) {
-  return /(^|[-_\s])EP(?:[-_\s]|\d|$)/i.test(normalizeText(value));
+  return SPLICE_ENDPOINT_PATTERN.test(normalizeText(value));
 }
 
 function columnLetterToNumber(columnLetter) {
@@ -408,6 +463,18 @@ function parseCellRange(range) {
 
 function rangesOverlap(firstStart, firstEnd, secondStart, secondEnd) {
   return firstStart <= secondEnd && secondStart <= firstEnd;
+}
+
+function unmergeColumnRanges(worksheet, startColumn, endColumn) {
+  for (const range of [...(worksheet.model.merges ?? [])]) {
+    const parsed = parseCellRange(range);
+    if (parsed === null) {
+      continue;
+    }
+    if (rangesOverlap(parsed.startColumn, parsed.endColumn, startColumn, endColumn)) {
+      worksheet.unMergeCells(range);
+    }
+  }
 }
 
 function unmergeAccessoryRanges(worksheet) {
@@ -817,6 +884,19 @@ function applyClonedFont(targetCell, font) {
   };
 }
 
+function clearCellFill(cell) {
+  const style = cloneCellStyleObject(cell);
+  delete style.fill;
+  cell.style = style;
+}
+
+function clearTextPrefixMetadata(cell) {
+  const style = cloneCellStyleObject(cell);
+  delete style.quotePrefix;
+  cell.style = style;
+  cell.quotePrefix = false;
+}
+
 function pairIsEmpty(firstValue, secondValue) {
   return normalizeText(firstValue).length === 0 && normalizeText(secondValue).length === 0;
 }
@@ -852,6 +932,21 @@ function excelCellValue(value) {
   return value;
 }
 
+function normalizeTwistGroupLabel(value) {
+  return normalizeText(value).replace(/^'+/, "");
+}
+
+function excelTwistGroupValue(value) {
+  const label = normalizeTwistGroupLabel(value);
+  if (/^(0|[1-9]\d*)$/.test(label)) {
+    const numericValue = Number(label);
+    if (Number.isSafeInteger(numericValue)) {
+      return numericValue;
+    }
+  }
+  return label;
+}
+
 function makeCalibriFont(sourceFont = {}) {
   return {
     ...sourceFont,
@@ -860,6 +955,15 @@ function makeCalibriFont(sourceFont = {}) {
     size: 8,
     color: { argb: "FF000000" },
     bold: false
+  };
+}
+
+function makeDataCellFont(sourceFont = {}) {
+  return {
+    ...sourceFont,
+    name: "Calibri",
+    family: 2,
+    size: 8
   };
 }
 
@@ -883,19 +987,44 @@ function applyAccessoryBandStyle(row, column, fill) {
 }
 
 function applyAccessoryStyles(row, accessoryStyles) {
-  for (let column = 8; column <= 13; column += 1) {
+  for (let column = 7; column <= 12; column += 1) {
     applyAccessoryBandStyle(row, column, accessoryStyles.beginFill);
   }
-  for (let column = 14; column <= 20; column += 1) {
+  for (let column = 13; column <= 18; column += 1) {
     applyAccessoryBandStyle(row, column, accessoryStyles.endFill);
   }
 }
 
 function applyEmptyPairHatches(row, accessoryStyles) {
-  applyPairHatchIfEmpty(row, 10, 11);
-  applyPairHatchIfEmpty(row, 12, 13);
+  applyPairHatchIfEmpty(row, 9, 10);
+  applyPairHatchIfEmpty(row, 11, 12);
+  applyPairHatchIfEmpty(row, 15, 16);
   applyPairHatchIfEmpty(row, 17, 18);
-  applyPairHatchIfEmpty(row, 19, 20);
+}
+
+function setCellBorderSide(cell, side, border) {
+  cell.border = {
+    ...(cell.border ?? {}),
+    [side]: cloneJson(border)
+  };
+}
+
+function applyCutSheetEndpointSeparator(worksheet) {
+  for (let rowNumber = 1; rowNumber <= worksheet.rowCount; rowNumber += 1) {
+    const row = worksheet.getRow(rowNumber);
+    setCellBorderSide(row.getCell(13), "right", FDC_CELL_BORDER);
+    setCellBorderSide(row.getCell(14), "left", FDC_CELL_BORDER);
+  }
+}
+
+function applyCutSheetDataFont(worksheet) {
+  for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber += 1) {
+    const row = worksheet.getRow(rowNumber);
+    for (let column = 1; column <= 21; column += 1) {
+      const cell = row.getCell(column);
+      cell.font = makeDataCellFont(cell.font ?? {});
+    }
+  }
 }
 
 function fillEndpointAccessoryCells(row, startColumn, isSplice, connection, seal) {
@@ -929,26 +1058,39 @@ function fillFdcRow(row, wireNumber, resolution, accessoryStyles) {
   const endSeal = readReferenceAndName(wire, "End seal ref", "End seal name");
   const beginIsSplice = isSpliceEndpoint(wire["Begin ID"]);
   const endIsSplice = isSpliceEndpoint(wire["End ID"]);
+  const twistValue = excelTwistGroupValue(wire["Twist group"]);
+  const twistLabel = normalizeText(twistValue);
 
   row.getCell(1).value = wire.Name;
-  row.getCell(2).value = wire.Name;
-  row.getCell(3).value = wireNumber;
-  row.getCell(4).value = resolution.sectionMm2;
-  row.getCell(5).value = resolution.color.ok ? formatFdcColor(resolution.color.colorCode) : resolution.color.raw;
-  row.getCell(6).value = excelCellValue(resolution.cableReference ?? "");
-  row.getCell(7).value = parseNumber(wire["Length (mm)"]) ?? wire["Length (mm)"];
-  row.getCell(8).value = wire["Begin ID"];
-  row.getCell(9).value = excelCellValue(normalizePin(wire["Begin pin"]));
+  row.getCell(2).value = parseTechnicalIdWireNumber(wire["Technical ID"]) ?? wireNumber;
+  row.getCell(3).value = resolution.sectionMm2;
+  const colorDisplay = resolution.color.ok ? formatFdcColor(resolution.color.colorCode) : resolution.color.raw;
+  row.getCell(4).value = colorDisplay;
+  applyFdcColorCellStyle(row.getCell(4), colorDisplay);
+  row.getCell(5).value = excelCellValue(resolution.cableReference ?? "");
+  row.getCell(6).value = parseNumber(wire["Length (mm)"]) ?? wire["Length (mm)"];
+  row.getCell(7).value = wire["Begin ID"];
+  row.getCell(8).value = excelCellValue(normalizePin(wire["Begin pin"]));
   applyAccessoryStyles(row, accessoryStyles);
-  fillEndpointAccessoryCells(row, 10, beginIsSplice, beginConnection, beginSeal);
-  row.getCell(14).value = wire["End ID"];
-  row.getCell(15).value = wire["End ID"];
-  row.getCell(16).value = excelCellValue(normalizePin(wire["End pin"]));
-  fillEndpointAccessoryCells(row, 17, endIsSplice, endConnection, endSeal);
+  fillEndpointAccessoryCells(row, 9, beginIsSplice, beginConnection, beginSeal);
+  row.getCell(13).value = wire["End ID"];
+  row.getCell(14).value = excelCellValue(normalizePin(wire["End pin"]));
+  fillEndpointAccessoryCells(row, 15, endIsSplice, endConnection, endSeal);
   applyEmptyPairHatches(row, accessoryStyles);
-  row.getCell(21).value = wire["Twist group"] ?? "";
-  row.getCell(22).value = resolution.status === "resolved" ? "" : `UNRESOLVED: ${resolution.reason}`;
-  row.getCell(23).value = resolution.normalizedKey ?? "";
+  const twistCell = row.getCell(19);
+  twistCell.value = twistValue;
+  clearTextPrefixMetadata(twistCell);
+  if (twistLabel.length > 0) {
+    twistCell.fill = cloneJson(FDC_TWIST_FILL);
+  } else {
+    clearCellFill(twistCell);
+  }
+  row.getCell(20).value = resolution.status === "resolved" ? "" : `UNRESOLVED: ${resolution.reason}`;
+  row.getCell(21).value = resolution.normalizedKey ?? "";
+  for (let column = 1; column <= 21; column += 1) {
+    const cell = row.getCell(column);
+    cell.font = makeDataCellFont(cell.font ?? {});
+  }
 }
 
 function copyRowStyle(sourceRow, targetRow) {
@@ -1029,15 +1171,27 @@ function copyWorksheetTemplate(workbook, sourceWorksheet, name) {
 function prepareCutSheetWorksheet(worksheet) {
   worksheet.spliceColumns(19, 1);
   unmergeAccessoryRanges(worksheet);
+  const designationWidth = (worksheet.getColumn(1).width ?? 0) + (worksheet.getColumn(2).width ?? 0);
+  unmergeColumnRanges(worksheet, 1, 2);
+  worksheet.spliceColumns(2, 1);
+  if (designationWidth > 0) {
+    worksheet.getColumn(1).width = designationWidth;
+  }
+  unmergeColumnRanges(worksheet, 14, 15);
+  worksheet.spliceColumns(15, 1);
+  worksheet.getColumn(13).width = worksheet.getColumn(7).width;
+  worksheet.getColumn(14).width = worksheet.getColumn(8).width;
+  worksheet.getRow(1).getCell(21).value = "Section / couleur plan";
 }
 
 function clearAndFillCutSheetWorksheet(worksheet, resolutions) {
+  const sortedResolutions = [...resolutions].sort(compareResolutionsByTechnicalId);
   const templateStyleRow = worksheet.getRow(2);
   const accessoryStyles = {
-    beginFill: cloneCellFill(templateStyleRow.getCell(8)),
-    endFill: cloneCellFill(templateStyleRow.getCell(14))
+    beginFill: cloneCellFill(templateStyleRow.getCell(7)),
+    endFill: cloneCellFill(templateStyleRow.getCell(13))
   };
-  const rowsToWrite = resolutions.length;
+  const rowsToWrite = sortedResolutions.length;
   const existingDataRows = Math.max(0, worksheet.rowCount - 1);
 
   for (let rowNumber = 2; rowNumber <= Math.max(worksheet.rowCount, rowsToWrite + 1); rowNumber += 1) {
@@ -1045,23 +1199,29 @@ function clearAndFillCutSheetWorksheet(worksheet, resolutions) {
     if (rowNumber > 2) {
       copyRowStyle(templateStyleRow, row);
     }
-    for (let column = 1; column <= 23; column += 1) {
+    for (let column = 1; column <= 21; column += 1) {
       row.getCell(column).value = null;
     }
+    clearCellFill(row.getCell(19));
   }
 
-  resolutions.forEach((resolution, index) => {
+  sortedResolutions.forEach((resolution, index) => {
     const row = worksheet.getRow(index + 2);
     if (index > 0 || existingDataRows === 0) {
       copyRowStyle(templateStyleRow, row);
     }
+    // Same value as the FIL column, reused by the epissure worksheet so both sheets
+    // reference the wire by an identical number.
+    resolution.displayWireNumber = parseTechnicalIdWireNumber(resolution.wire["Technical ID"]) ?? (index + 1);
     fillFdcRow(row, index + 1, resolution, accessoryStyles);
     row.commit();
   });
+  applyCutSheetEndpointSeparator(worksheet);
+  applyCutSheetDataFont(worksheet);
 
   worksheet.autoFilter = {
     from: "A1",
-    to: { row: 1, column: 23 }
+    to: { row: 1, column: 21 }
   };
 }
 
@@ -1070,9 +1230,49 @@ function getWireLabel(wire) {
   return technicalId.length > 0 ? technicalId : normalizeText(wire.Name);
 }
 
-function addSpliceWire(splices, spliceId, side, label) {
+function parseTechnicalIdWireNumber(technicalId) {
+  const match = normalizeText(technicalId).match(/(?:^|-)W-(\d+)(?:\D*$|$)/i);
+  return match === null ? null : Number(match[1]);
+}
+
+function compareResolutionsByTechnicalId(first, second) {
+  const firstNumber = parseTechnicalIdWireNumber(first.wire?.["Technical ID"]);
+  const secondNumber = parseTechnicalIdWireNumber(second.wire?.["Technical ID"]);
+  if (firstNumber !== null && secondNumber !== null && firstNumber !== secondNumber) {
+    return firstNumber - secondNumber;
+  }
+  if (firstNumber !== null && secondNumber === null) {
+    return -1;
+  }
+  if (firstNumber === null && secondNumber !== null) {
+    return 1;
+  }
+  return (first.sourceRow ?? 0) - (second.sourceRow ?? 0);
+}
+
+function spliceSideFromPin(pinValue) {
+  const pin = normalizeText(pinValue).toUpperCase();
+  if (pin === "L") {
+    return "left";
+  }
+  if (pin === "R") {
+    return "right";
+  }
+  return null;
+}
+
+function spliceWireEntry(resolution) {
+  const wire = resolution.wire;
+  const number = resolution.displayWireNumber
+    ?? parseTechnicalIdWireNumber(wire["Technical ID"])
+    ?? getWireLabel(wire);
+  const twistGroup = normalizeTwistGroupLabel(wire["Twist group"]);
+  return { number, twisted: twistGroup.length > 0, twistGroup };
+}
+
+function addSpliceWire(splices, spliceId, side, entry) {
   const normalizedSpliceId = normalizeText(spliceId);
-  if (normalizedSpliceId.length === 0 || label.length === 0) {
+  if (normalizedSpliceId.length === 0 || `${entry.number}`.length === 0) {
     return;
   }
   const splice = splices.get(normalizedSpliceId) ?? {
@@ -1080,23 +1280,48 @@ function addSpliceWire(splices, spliceId, side, label) {
     left: [],
     right: []
   };
-  splice[side].push(label);
+  splice[side].push(entry);
   splices.set(normalizedSpliceId, splice);
 }
 
 function collectSpliceTables(resolutions) {
   const splices = new Map();
+  const sideFlags = [];
   for (const resolution of resolutions) {
     const wire = resolution.wire;
-    const label = getWireLabel(wire);
-    if (isSpliceEndpoint(wire["End ID"])) {
-      addSpliceWire(splices, wire["End ID"], "left", label);
-    }
-    if (isSpliceEndpoint(wire["Begin ID"])) {
-      addSpliceWire(splices, wire["Begin ID"], "right", label);
+    const entry = spliceWireEntry(resolution);
+    // The side of a splice is carried by the splice-endpoint pin (`L`/`R`), not by
+    // whether the splice sits in `Begin ID` or `End ID`. Begin/End only encodes the
+    // modeler's drawing direction and does not reliably match the physical side.
+    const endpoints = [
+      { id: wire["Begin ID"], pin: wire["Begin pin"], position: "Begin", fallbackSide: "right" },
+      { id: wire["End ID"], pin: wire["End pin"], position: "End", fallbackSide: "left" }
+    ];
+    for (const endpoint of endpoints) {
+      if (!isSpliceEndpoint(endpoint.id)) {
+        continue;
+      }
+      const side = spliceSideFromPin(endpoint.pin);
+      if (side === null) {
+        // Pin is not the expected L/R marker (empty, numeric, or a 3+ branch splice):
+        // do not guess. Flag it and apply the documented deterministic fallback
+        // (Begin -> right, End -> left, the legacy heuristic).
+        sideFlags.push({
+          spliceId: normalizeText(endpoint.id),
+          position: endpoint.position,
+          pin: normalizeText(endpoint.pin),
+          wireNumber: entry.number,
+          technicalId: normalizeText(wire["Technical ID"]),
+          fallbackSide: endpoint.fallbackSide
+        });
+        addSpliceWire(splices, endpoint.id, endpoint.fallbackSide, entry);
+        continue;
+      }
+      addSpliceWire(splices, endpoint.id, side, entry);
     }
   }
-  return [...splices.values()].sort((first, second) => first.id.localeCompare(second.id));
+  const tables = [...splices.values()].sort((first, second) => first.id.localeCompare(second.id));
+  return { tables, sideFlags };
 }
 
 const EPISSURE_TABLE_BORDER = {
@@ -1106,19 +1331,40 @@ const EPISSURE_TABLE_BORDER = {
   right: { style: "thin" }
 };
 
-const EPISSURE_CONNECTOR_BORDER = {
-  style: "medium",
-  color: { argb: "FF000000" }
-};
-
 const EPISSURE_CENTER_FILL = {
   type: "pattern",
   pattern: "solid",
   fgColor: { argb: "FF000000" }
 };
 
+const EPISSURE_TITLE_FILL = {
+  type: "pattern",
+  pattern: "solid",
+  fgColor: { argb: "FFD9D9D9" }
+};
+
+const EPISSURE_OUTER_BORDER = {
+  style: "thick",
+  color: { argb: "FF000000" }
+};
+
+const EPISSURE_TABLE_START_COLUMN = 2;
+const EPISSURE_TABLE_END_COLUMN = 8;
+const EPISSURE_LEFT_NUMBER_COLUMN = 2;
+const EPISSURE_LEFT_WIRE_COLUMN = 3;
+const EPISSURE_LEFT_SPACER_COLUMN = 4;
+const EPISSURE_CENTER_COLUMN = 5;
+const EPISSURE_RIGHT_SPACER_COLUMN = 6;
+// Right side mirrors the left: the wire label sits in the inner column (G, adjacent
+// to the central spacer) and the sequence number in the outer column (H).
+const EPISSURE_RIGHT_WIRE_COLUMN = 7;
+const EPISSURE_RIGHT_NUMBER_COLUMN = 8;
+const EPISSURE_LEFT_WIRE_WIDTH_EMU = 1260000;
+const EPISSURE_CENTER_WIDTH_EMU = 700000;
+const EPISSURE_ROW_MIDDLE_OFFSET_EMU = 95000;
+
 function styleEpissureTableRow(row) {
-  for (let column = 1; column <= 5; column += 1) {
+  for (let column = EPISSURE_TABLE_START_COLUMN; column <= EPISSURE_TABLE_END_COLUMN; column += 1) {
     const cell = row.getCell(column);
     cell.border = cloneJson(EPISSURE_TABLE_BORDER);
     cell.alignment = { vertical: "middle" };
@@ -1126,51 +1372,78 @@ function styleEpissureTableRow(row) {
   }
 }
 
-function setConnectorBorder(cell, side) {
+function setOuterBorder(cell, side) {
   cell.border = {
     ...(cell.border ?? {}),
-    [side]: cloneJson(EPISSURE_CONNECTOR_BORDER)
+    [side]: cloneJson(EPISSURE_OUTER_BORDER)
   };
 }
 
-function applyLeftConnector(row) {
-  setConnectorBorder(row.getCell(1), "right");
-  setConnectorBorder(row.getCell(2), "bottom");
-  setConnectorBorder(row.getCell(3), "left");
-}
-
-function applyRightConnector(row) {
-  setConnectorBorder(row.getCell(3), "right");
-  setConnectorBorder(row.getCell(4), "left");
-  setConnectorBorder(row.getCell(4), "right");
+function applyEpissureOuterBorder(worksheet, startRowNumber, endRowNumber) {
+  for (let rowNumber = startRowNumber; rowNumber <= endRowNumber; rowNumber += 1) {
+    const row = worksheet.getRow(rowNumber);
+    for (let column = EPISSURE_TABLE_START_COLUMN; column <= EPISSURE_TABLE_END_COLUMN; column += 1) {
+      const cell = row.getCell(column);
+      if (rowNumber === startRowNumber) {
+        setOuterBorder(cell, "top");
+      }
+      if (rowNumber === endRowNumber) {
+        setOuterBorder(cell, "bottom");
+      }
+      if (column === EPISSURE_TABLE_START_COLUMN) {
+        setOuterBorder(cell, "left");
+      }
+      if (column === EPISSURE_TABLE_END_COLUMN) {
+        setOuterBorder(cell, "right");
+      }
+    }
+  }
 }
 
 function fillEpissureCenterCell(row) {
-  const centerCell = row.getCell(3);
+  const centerCell = row.getCell(EPISSURE_CENTER_COLUMN);
   centerCell.value = null;
   centerCell.fill = cloneJson(EPISSURE_CENTER_FILL);
+}
+
+function writeEpissureWireCell(cell, entry) {
+  if (entry === undefined) {
+    cell.value = "";
+    return;
+  }
+  cell.value = entry.twisted ? `${entry.number} (${entry.twistGroup})` : entry.number;
+  if (entry.twisted) {
+    cell.font = { ...makeCalibriFont(cell.font ?? {}), italic: true, bold: true };
+  }
 }
 
 function writeEpissureWorksheet(workbook, cutSheetName, resolutions) {
   const worksheet = workbook.addWorksheet(makeUniqueWorksheetName(workbook, `${cutSheetName} Epissures`));
   worksheet.columns = [
+    { width: 2 },
     { width: 4 },
-    { width: 28 },
+    { width: 18 },
+    { width: 20 },
     { width: 10 },
-    { width: 4 },
-    { width: 28 }
+    { width: 20 },
+    { width: 18 },
+    { width: 4 }
   ];
 
-  const spliceTables = collectSpliceTables(resolutions);
-  let rowNumber = 1;
+  const { tables: spliceTables, sideFlags } = collectSpliceTables(resolutions);
+  const connectorCurves = [];
+  let rowNumber = 2;
   for (const splice of spliceTables) {
+    const tableStartRowNumber = rowNumber;
+    const spliceTwisted = [...splice.left, ...splice.right].some((entry) => entry.twisted);
     const titleRow = worksheet.getRow(rowNumber);
-    worksheet.mergeCells(rowNumber, 1, rowNumber, 5);
-    const titleCell = titleRow.getCell(1);
-    titleCell.value = splice.id;
+    worksheet.mergeCells(rowNumber, EPISSURE_TABLE_START_COLUMN, rowNumber, EPISSURE_TABLE_END_COLUMN);
+    const titleCell = titleRow.getCell(EPISSURE_TABLE_START_COLUMN);
+    titleCell.value = spliceTwisted ? `${splice.id} (torsadé)` : splice.id;
     styleEpissureTableRow(titleRow);
     titleCell.font = { ...makeCalibriFont(titleCell.font ?? {}), bold: true };
     titleCell.alignment = { horizontal: "center", vertical: "middle" };
+    titleCell.fill = cloneJson(EPISSURE_TITLE_FILL);
 
     const rowCount = Math.max(splice.left.length, splice.right.length, 1);
     const centerRowNumber = rowNumber + Math.ceil(rowCount / 2);
@@ -1178,27 +1451,250 @@ function writeEpissureWorksheet(workbook, cutSheetName, resolutions) {
       const row = worksheet.getRow(rowNumber + index + 1);
       const leftWire = splice.left[index];
       const rightWire = splice.right[index];
-      row.getCell(1).value = leftWire === undefined ? "" : index + 1;
-      row.getCell(2).value = leftWire ?? "";
-      row.getCell(4).value = rightWire === undefined ? "" : index + 1;
-      row.getCell(5).value = rightWire ?? "";
+      row.getCell(EPISSURE_LEFT_NUMBER_COLUMN).value = leftWire === undefined ? "" : index + 1;
+      row.getCell(EPISSURE_RIGHT_NUMBER_COLUMN).value = rightWire === undefined ? "" : index + 1;
       styleEpissureTableRow(row);
-      row.getCell(1).alignment = { horizontal: "center", vertical: "middle" };
-      row.getCell(4).alignment = { horizontal: "center", vertical: "middle" };
+      writeEpissureWireCell(row.getCell(EPISSURE_LEFT_WIRE_COLUMN), leftWire);
+      writeEpissureWireCell(row.getCell(EPISSURE_RIGHT_WIRE_COLUMN), rightWire);
+      row.getCell(EPISSURE_LEFT_NUMBER_COLUMN).alignment = { horizontal: "center", vertical: "middle" };
+      row.getCell(EPISSURE_RIGHT_NUMBER_COLUMN).alignment = { horizontal: "center", vertical: "middle" };
       if (leftWire !== undefined) {
-        applyLeftConnector(row);
+        connectorCurves.push({
+          rowNumber: row.number,
+          side: "left",
+          centerRowNumber
+        });
       }
       if (rightWire !== undefined) {
-        applyRightConnector(row);
+        connectorCurves.push({
+          rowNumber: row.number,
+          side: "right",
+          centerRowNumber
+        });
       }
       if (row.number === centerRowNumber) {
         fillEpissureCenterCell(row);
       }
     }
 
+    applyEpissureOuterBorder(worksheet, tableStartRowNumber, rowNumber + rowCount);
     rowNumber += rowCount + 3;
   }
-  return worksheet;
+  return { worksheet, connectorCurves, sideFlags };
+}
+
+function escapeXmlAttribute(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function decodeXmlAttribute(value) {
+  return String(value)
+    .replace(/&quot;/g, "\"")
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+function normalizeZipPath(pathName) {
+  return pathName.replace(/^\/+/, "").replace(/\/{2,}/g, "/");
+}
+
+async function readZipText(zip, filePath) {
+  const file = zip.file(filePath);
+  if (file === null) {
+    return null;
+  }
+  return file.async("text");
+}
+
+function nextRelationshipId(relsXml) {
+  const ids = [...relsXml.matchAll(/\bId="rId(\d+)"/g)].map((match) => Number(match[1]));
+  return `rId${Math.max(0, ...ids) + 1}`;
+}
+
+function worksheetRelPath(worksheetPath) {
+  const fileName = path.posix.basename(worksheetPath);
+  return `${path.posix.dirname(worksheetPath)}/_rels/${fileName}.rels`;
+}
+
+function worksheetDrawingRelationshipTarget(worksheetPath, drawingPath) {
+  return path.posix.relative(path.posix.dirname(worksheetPath), drawingPath);
+}
+
+function addRelationship(relsXml, id, type, target) {
+  const relationship = `<Relationship Id="${escapeXmlAttribute(id)}" Type="${escapeXmlAttribute(type)}" Target="${escapeXmlAttribute(target)}"/>`;
+  return relsXml.replace("</Relationships>", `${relationship}</Relationships>`);
+}
+
+function ensureWorksheetDrawingReference(worksheetXml, relationshipId) {
+  const withNamespace = worksheetXml.includes("xmlns:r=")
+    ? worksheetXml
+    : worksheetXml.replace("<worksheet ", "<worksheet xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" ");
+  if (/<drawing\b/.test(withNamespace)) {
+    return withNamespace.replace(/<drawing\b[^>]*\/>/, `<drawing r:id="${escapeXmlAttribute(relationshipId)}"/>`);
+  }
+  return withNamespace.replace("</worksheet>", `<drawing r:id="${escapeXmlAttribute(relationshipId)}"/></worksheet>`);
+}
+
+function ensureDrawingContentType(contentTypesXml, drawingPath) {
+  const partName = `/${drawingPath}`;
+  if (contentTypesXml.includes(`PartName="${partName}"`)) {
+    return contentTypesXml;
+  }
+  const override = `<Override PartName="${escapeXmlAttribute(partName)}" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`;
+  return contentTypesXml.replace("</Types>", `${override}</Types>`);
+}
+
+function nextDrawingPath(zip) {
+  const drawingNumbers = Object.keys(zip.files)
+    .map((filePath) => filePath.match(/^xl\/drawings\/drawing(\d+)\.xml$/)?.[1])
+    .filter((value) => value !== undefined)
+    .map(Number);
+  return `xl/drawings/drawing${Math.max(0, ...drawingNumbers) + 1}.xml`;
+}
+
+function makeConnectorAnchor(curve, index) {
+  const rowIndex = curve.rowNumber - 1;
+  const centerRowIndex = curve.centerRowNumber - 1;
+  const isLeft = curve.side === "left";
+  const topRowIndex = Math.min(rowIndex, centerRowIndex);
+  const bottomRowIndex = Math.max(rowIndex, centerRowIndex);
+  const from = {
+    columnIndex: isLeft ? EPISSURE_LEFT_WIRE_COLUMN - 1 : EPISSURE_CENTER_COLUMN - 1,
+    columnOffset: isLeft ? EPISSURE_LEFT_WIRE_WIDTH_EMU : EPISSURE_CENTER_WIDTH_EMU,
+    rowIndex: topRowIndex,
+    rowOffset: EPISSURE_ROW_MIDDLE_OFFSET_EMU
+  };
+  const to = {
+    columnIndex: isLeft ? EPISSURE_CENTER_COLUMN - 1 : EPISSURE_RIGHT_WIRE_COLUMN - 1,
+    columnOffset: 0,
+    rowIndex: bottomRowIndex,
+    rowOffset: EPISSURE_ROW_MIDDLE_OFFSET_EMU
+  };
+  const shouldFlipVertically = rowIndex > centerRowIndex;
+  const shouldFlipHorizontally = !isLeft;
+  const name = `${isLeft ? "Left" : "Right"} splice line ${index}`;
+
+  return `  <xdr:twoCellAnchor editAs="oneCell">
+    <xdr:from>
+      <xdr:col>${from.columnIndex}</xdr:col>
+      <xdr:colOff>${from.columnOffset}</xdr:colOff>
+      <xdr:row>${from.rowIndex}</xdr:row>
+      <xdr:rowOff>${from.rowOffset}</xdr:rowOff>
+    </xdr:from>
+    <xdr:to>
+      <xdr:col>${to.columnIndex}</xdr:col>
+      <xdr:colOff>${to.columnOffset}</xdr:colOff>
+      <xdr:row>${to.rowIndex}</xdr:row>
+      <xdr:rowOff>${to.rowOffset}</xdr:rowOff>
+    </xdr:to>
+    <xdr:cxnSp macro="">
+      <xdr:nvCxnSpPr>
+        <xdr:cNvPr id="${index}" name="${escapeXmlAttribute(name)}"/>
+        <xdr:cNvCxnSpPr/>
+        <xdr:nvPr/>
+      </xdr:nvCxnSpPr>
+      <xdr:spPr>
+        <a:xfrm${shouldFlipHorizontally ? " flipH=\"1\"" : ""}${shouldFlipVertically ? " flipV=\"1\"" : ""}>
+          <a:off x="0" y="0"/>
+          <a:ext cx="0" cy="0"/>
+        </a:xfrm>
+        <a:prstGeom prst="straightConnector1">
+          <a:avLst/>
+        </a:prstGeom>
+        <a:ln w="19050" cap="rnd">
+          <a:solidFill>
+            <a:srgbClr val="000000"/>
+          </a:solidFill>
+          <a:round/>
+        </a:ln>
+      </xdr:spPr>
+    </xdr:cxnSp>
+    <xdr:clientData/>
+  </xdr:twoCellAnchor>`;
+}
+
+function buildDrawingXml(curves) {
+  const anchors = curves.map((curve, index) => makeConnectorAnchor(curve, index + 1)).join("\n");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+${anchors}
+</xdr:wsDr>`;
+}
+
+async function mapWorksheetNamesToPaths(zip) {
+  const workbookXml = await readZipText(zip, "xl/workbook.xml");
+  const workbookRelsXml = await readZipText(zip, "xl/_rels/workbook.xml.rels");
+  if (workbookXml === null || workbookRelsXml === null) {
+    throw new Error("Unable to patch epissure curve drawings: workbook XML relationships are missing.");
+  }
+
+  const relationshipTargets = new Map();
+  for (const match of workbookRelsXml.matchAll(/<Relationship\b[^>]*\bId="([^"]+)"[^>]*\bTarget="([^"]+)"[^>]*\/>/g)) {
+    relationshipTargets.set(match[1], normalizeZipPath(path.posix.join("xl", decodeXmlAttribute(match[2]))));
+  }
+
+  const sheetPaths = new Map();
+  for (const match of workbookXml.matchAll(/<sheet\b[^>]*\bname="([^"]+)"[^>]*\br:id="([^"]+)"[^>]*\/>/g)) {
+    const sheetName = decodeXmlAttribute(match[1]);
+    const targetPath = relationshipTargets.get(match[2]);
+    if (targetPath !== undefined) {
+      sheetPaths.set(sheetName, targetPath);
+    }
+  }
+  return sheetPaths;
+}
+
+async function patchEpissureCurveDrawings(outputPath, drawingPlans) {
+  const plansWithCurves = drawingPlans.filter((plan) => plan.connectorCurves.length > 0);
+  if (plansWithCurves.length === 0) {
+    return;
+  }
+
+  const JSZip = (await import("jszip")).default;
+  const zip = await JSZip.loadAsync(readFileSync(outputPath));
+  const sheetPaths = await mapWorksheetNamesToPaths(zip);
+  let contentTypesXml = await readZipText(zip, "[Content_Types].xml");
+  if (contentTypesXml === null) {
+    throw new Error("Unable to patch epissure curve drawings: [Content_Types].xml is missing.");
+  }
+
+  for (const plan of plansWithCurves) {
+    const worksheetPath = sheetPaths.get(plan.worksheetName);
+    if (worksheetPath === undefined) {
+      throw new Error(`Unable to patch epissure curve drawings: worksheet '${plan.worksheetName}' was not found in workbook.xml.`);
+    }
+
+    const drawingPath = nextDrawingPath(zip);
+    const relPath = worksheetRelPath(worksheetPath);
+    const worksheetXml = await readZipText(zip, worksheetPath);
+    const existingRelsXml = await readZipText(zip, relPath);
+    if (worksheetXml === null) {
+      throw new Error(`Unable to patch epissure curve drawings: worksheet part '${worksheetPath}' is missing.`);
+    }
+
+    const relsXml = existingRelsXml ?? "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"></Relationships>";
+    const relationshipId = nextRelationshipId(relsXml);
+    const updatedRelsXml = addRelationship(
+      relsXml,
+      relationshipId,
+      "http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing",
+      worksheetDrawingRelationshipTarget(worksheetPath, drawingPath)
+    );
+
+    zip.file(drawingPath, buildDrawingXml(plan.connectorCurves));
+    zip.file(relPath, updatedRelsXml);
+    zip.file(worksheetPath, ensureWorksheetDrawingReference(worksheetXml, relationshipId));
+    contentTypesXml = ensureDrawingContentType(contentTypesXml, drawingPath);
+  }
+
+  zip.file("[Content_Types].xml", contentTypesXml);
+  writeFileSync(outputPath, await zip.generateAsync({ type: "nodebuffer" }));
 }
 
 async function writeCutSheetWorkbook(ExcelJS, templatePath, outputPath, sheetResolutions) {
@@ -1226,12 +1722,23 @@ async function writeCutSheetWorkbook(ExcelJS, templatePath, outputPath, sheetRes
     return { worksheet, resolutions: sheet.resolutions };
   });
 
+  const epissureDrawingPlans = [];
+  const spliceSideFlags = [];
   outputWorksheets.forEach(({ worksheet, resolutions }) => {
     clearAndFillCutSheetWorksheet(worksheet, resolutions);
-    writeEpissureWorksheet(workbook, worksheet.name, resolutions);
+    const epissures = writeEpissureWorksheet(workbook, worksheet.name, resolutions);
+    epissureDrawingPlans.push({
+      worksheetName: epissures.worksheet.name,
+      connectorCurves: epissures.connectorCurves
+    });
+    for (const flag of epissures.sideFlags) {
+      spliceSideFlags.push({ ...flag, cutSheet: worksheet.name });
+    }
   });
   ensureDirectory(path.dirname(outputPath));
   await workbook.xlsx.writeFile(outputPath);
+  await patchEpissureCurveDrawings(outputPath, epissureDrawingPlans);
+  return { spliceSideFlags };
 }
 
 async function buildCatalogArtifact(ExcelJS) {
@@ -1311,11 +1818,15 @@ async function buildCutSheets(ExcelJS, catalogArtifact) {
     const resolutions = sheetResolutions.flatMap((sheet) => sheet.resolutions);
     const baseName = path.basename(filePath, path.extname(filePath));
     const outputPath = path.join(DEFAULTS.outputDirectory, `Fdc_generated_${baseName}.xlsx`);
-    await writeCutSheetWorkbook(ExcelJS, DEFAULTS.templateWorkbook, outputPath, sheetResolutions);
+    const { spliceSideFlags } = await writeCutSheetWorkbook(ExcelJS, DEFAULTS.templateWorkbook, outputPath, sheetResolutions);
+    if (spliceSideFlags.length > 0) {
+      console.warn(`${path.basename(filePath)}: ${spliceSideFlags.length} splice endpoint(s) without an L/R pin, placed by fallback side. See report 'spliceSideFlags'.`);
+    }
     reports.push({
       sourceFile: filePath,
       outputFile: outputPath,
       summary: summarizeResolutions(resolutions),
+      spliceSideFlags,
       sheets: sheetResolutions.map((sheet) => ({
         name: sheet.name,
         summary: summarizeResolutions(sheet.resolutions),

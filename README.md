@@ -28,19 +28,15 @@ Le projet utilise `exceljs`. En environnement de travail local, si la dependance
 .
 ├── src/
 │   └── amipi-cut-wires.mjs
-├── inputs/
-│   ├── amipi/
-│   │   └── Liste cables AMIPI.xlsx
-│   └── templates/
-│       └── Fdc_CI1250507 Principal CIRCLE.xlsx
-├── examples/
-│   └── exports/
+├── IN/
+│   └── wire-list-*.xlsx
 ├── data/
-├── reports/
-└── out/
+│   ├── Liste cables AMIPI.xlsx
+│   └── Fdc_CI1250507 Principal CIRCLE.xlsx
+└── OUT/
 ```
 
-Les dossiers `data/`, `reports/` et `out/` sont des sorties generees.
+Le dossier `IN/` contient les exports fil-a-fil a traiter. Le dossier `data/` contient les fichiers de reference AMIPI et FDC. Le dossier `OUT/` contient les sorties generees.
 
 ## Commandes
 
@@ -84,7 +80,7 @@ npm run logics:audit
 Chemin par defaut :
 
 ```text
-inputs/amipi/Liste cables AMIPI.xlsx
+data/Liste cables AMIPI.xlsx
 ```
 
 L'onglet `CABLE165` est utilise si present, sinon le premier onglet du classeur est lu.
@@ -94,7 +90,7 @@ L'onglet `CABLE165` est utilise si present, sinon le premier onglet du classeur 
 Chemin par defaut :
 
 ```text
-inputs/templates/Fdc_CI1250507 Principal CIRCLE.xlsx
+data/Fdc_CI1250507 Principal CIRCLE.xlsx
 ```
 
 L'onglet `Feuille de coupe` est utilise comme modele de sortie. L'onglet `Epissures`, s'il existe, est retire des fichiers generes.
@@ -104,7 +100,7 @@ L'onglet `Feuille de coupe` est utilise comme modele de sortie. L'onglet `Epissu
 Chemin par defaut :
 
 ```text
-examples/exports/
+IN/
 ```
 
 Chaque fichier `.xlsx` ou `.csv` est traite. Pour les `.xlsx`, tous les onglets lisibles sont traites.
@@ -136,24 +132,34 @@ Colonnes accessoires utilisees si presentes :
 ## Sorties
 
 ```text
-data/amipi-cables.normalized.json
-reports/wire-resolution-report.json
-out/Fdc_generated_<nom-export>.xlsx
+OUT/amipi-cables.normalized.json
+OUT/wire-resolution-report.json
+OUT/Fdc_generated_<nom-export>.xlsx
 ```
 
 Si un export source contient plusieurs onglets, le fichier FDC genere contient un onglet de coupe par onglet source.
 
-Chaque onglet de coupe a aussi un onglet associe `<nom-onglet> Epissures`. Ces onglets listent les epissures detectees depuis les colonnes `Begin ID` et `End ID` sous forme de tables 5 colonnes :
+Dans les onglets de coupe, les lignes sont triees par numero de fil croissant extrait depuis `Technical ID` quand il suit le format `*-W-###`. Par exemple, `LAT-W-025` donne `25`. Si le numero ne peut pas etre extrait, l'ordre de ligne genere reste utilise en secours. La designation utilise une seule colonne, sans fusion `A:B`.
 
-- la colonne 1 numerote les fils du cote gauche de l'epissure ;
-- la colonne 2 contient les fils dont l'epissure est dans `End ID` ;
-- la colonne 3 contient la cellule centrale noire de l'epissure ;
-- la colonne 4 numerote les fils du cote droit de l'epissure ;
-- la colonne 5 contient les fils dont l'epissure est dans `Begin ID` ;
+Chaque onglet de coupe a aussi un onglet associe `<nom-onglet> Epissures`. Ces onglets listent les epissures detectees depuis les colonnes `Begin ID` et `End ID` sous forme de tables, precedees d'une ligne 1 vide et d'une colonne A vide pour rendre la bordure exterieure visible :
+
+- le cote d'un fil (gauche ou droite) est determine par le PIN de l'extremite epissure : pin `L` => cote gauche, pin `R` => cote droite. La position du fil dans `Begin ID` ou `End ID` n'est PAS utilisee pour le cote (elle ne reflete que le sens de trace du modeleur) ;
+- si le pin n'est ni `L` ni `R` (vide, numerique, epissure a 3+ branches), le fil n'est pas place au hasard : il suit un repli deterministe (epissure dans `Begin ID` => droite, dans `End ID` => gauche) et la situation est remontee dans le rapport JSON (`spliceSideFlags`) et signalee au build ;
+- la premiere colonne de table numerote sequentiellement les fils du cote gauche ;
+- la deuxieme colonne de table, de largeur 18, contient les fils du cote gauche (pin `L`) ;
+- une colonne vide de largeur 20 separe les fils gauches de la cellule centrale ;
+- la colonne centrale contient la cellule noire de l'epissure ;
+- une colonne vide de largeur 20 separe la cellule centrale des fils droits ;
+- la colonne suivante numerote sequentiellement les fils du cote droit ;
+- la derniere colonne, de largeur 18, contient les fils du cote droit (pin `R`) ;
+- chaque fil est etiquete par son numero `FIL`, identique a la colonne `FIL` de la feuille de coupe (et non par son `Technical ID`) ;
+- un fil torsade (colonne `Twist group` non vide) est affiche en gras italique, suivi de son groupe de torsade entre parentheses, ex. `14 (TOR01)` ; le titre de l'epissure correspondante est suffixe ` (torsadé)` ;
 - les fils d'une meme epissure sont regroupes sous un titre fusionne, centre et en gras ;
+- la case du titre de l'epissure a un fond gris 15% ;
+- chaque tableau d'epissure a une bordure exterieure epaisse ;
 - deux lignes vides separent les tables d'epissures.
 
-Les traits de liaison sont rendus avec des bordures Excel autour des cellules, car le generateur `exceljs` utilise ici un format de classeur sans insertion de formes de ligne arbitraires.
+Les traits de liaison sont inseres dans le fichier `.xlsx` comme des formes DrawingML `straightConnector1`, en noir et en epaisseur 1,5 pt.
 
 ## Workflow Logics
 

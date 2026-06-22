@@ -2,8 +2,8 @@
 > From version: 0.1.0
 > Schema version: 1.0
 > Status: Done
-> Understanding: 90%
-> Confidence: 85%
+> Understanding: 92
+> Confidence: 86
 > Complexity: Medium
 > Theme: Operator workflow
 > Reminder: Update status/understanding/confidence and linked backlog/task references when you edit this doc.
@@ -48,8 +48,10 @@
   - column 1 contains wires arriving to the left side of the splice;
   - columns 2, 3, and 4 remain empty for now;
   - column 5 contains wires leaving from the right side of the splice.
+- SUPERSEDED by `req_002`: the side is now derived from the splice-endpoint pin (`L` => left, `R` => right), not from `Begin ID`/`End ID`. The Begin/End rule below is kept only as the deterministic fallback when the pin is not `L`/`R`.
 - If the splice is found in `End ID`, put the wire on the left side, column 1.
 - If the splice is found in `Begin ID`, put the wire on the right side, column 5.
+- SUPERSEDED by `req_002`: the wire label is the `FIL` number (same as the cut-sheet column), not the `Technical ID`.
 - Use `Technical ID` as the wire label, with `Name` as fallback when `Technical ID` is empty.
 - The number of data rows is dynamic and equals the maximum of left-side and right-side wire counts.
 - Preserve all wires even when one side has more entries than the other.
@@ -75,8 +77,8 @@ flowchart TD
 - AC1: A generated workbook keeps all existing cut-sheet worksheets.
 - AC2: For each generated cut-sheet worksheet, an associated epissures worksheet is created.
 - AC3: Wires connected to the same splice ID are grouped in the same table.
-- AC4: Wires where the splice is in `End ID` appear in column 1.
-- AC5: Wires where the splice is in `Begin ID` appear in column 5.
+- AC4: Wires where the splice is in `End ID` appear in column 1. (SUPERSEDED by `req_002`: side now from pin `L`/`R`; this is the fallback only.)
+- AC5: Wires where the splice is in `Begin ID` appear in column 5. (SUPERSEDED by `req_002`: side now from pin `L`/`R`; this is the fallback only.)
 - AC6: Each splice table title row is merged across 5 columns, bold, and centered.
 - AC7: At least two blank rows separate two splice tables.
 - AC8: `npm run check` passes.
