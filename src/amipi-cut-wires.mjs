@@ -99,6 +99,107 @@ const MANUAL_CABLE_PREFERENCES = new Map([
   ["0.5|RS", "104604"]
 ]);
 
+const CUT_BLANK_ROW = 1;
+const CUT_HARNESS_TITLE_ROW = 2;
+const CUT_GROUP_HEADER_ROW = 3;
+const CUT_HEADER_ROW = 4;
+const CUT_DATA_START_ROW = 5;
+const CUT_COLUMN_COUNT = 22;
+const GENERATED_ROW_HEIGHT = 12.9;
+const TWIST_PITCH_MM = 13;
+const TWIST_LENGTH_FACTOR = 1.075;
+
+const CUT_COLUMNS = {
+  designation: 1,
+  wireNumber: 2,
+  epi: 3,
+  section: 4,
+  color: 5,
+  cable: 6,
+  length: 7,
+  beginApp: 8,
+  beginPin: 9,
+  beginConnectionName: 10,
+  beginConnectionRef: 11,
+  beginSealName: 12,
+  beginSealRef: 13,
+  endApp: 14,
+  endPin: 15,
+  endConnectionName: 16,
+  endConnectionRef: 17,
+  endSealName: 18,
+  endSealRef: 19,
+  twist: 20,
+  comment: 21,
+  commentEnd: 22
+};
+
+// The harness name is written in F2, above the cable/length area.
+const CUT_HARNESS_TITLE_COLUMN = CUT_COLUMNS.cable;
+
+const CUT_HEADERS = new Map([
+  [CUT_COLUMNS.designation, "DESIGNATION"],
+  [CUT_COLUMNS.wireNumber, "FIL"],
+  [CUT_COLUMNS.epi, "EPI"],
+  [CUT_COLUMNS.section, "SECT"],
+  [CUT_COLUMNS.color, "COULEUR"],
+  [CUT_COLUMNS.cable, "CABLE"],
+  [CUT_COLUMNS.length, "LONG"],
+  [CUT_COLUMNS.beginApp, "APP 1"],
+  [CUT_COLUMNS.beginPin, "VOIE 1"],
+  [CUT_COLUMNS.beginConnectionName, "Désignation CONNEXION 1 "],
+  [CUT_COLUMNS.beginConnectionRef, "CONNEXION 1"],
+  [CUT_COLUMNS.beginSealName, "Désignation JOINT 1 "],
+  [CUT_COLUMNS.beginSealRef, "JOINT 1"],
+  [CUT_COLUMNS.endApp, "APP 2"],
+  [CUT_COLUMNS.endPin, "VOIE 2"],
+  [CUT_COLUMNS.endConnectionName, "Désignation CONNEXION 2"],
+  [CUT_COLUMNS.endConnectionRef, "CONNEXION 2 "],
+  [CUT_COLUMNS.endSealName, "Désignation JOINT 2"],
+  [CUT_COLUMNS.endSealRef, "JOINT 2 "],
+  [CUT_COLUMNS.twist, "TORSADE"],
+  [CUT_COLUMNS.comment, "COMMENTAIRE"],
+  [CUT_COLUMNS.commentEnd, "COMMENTAIRE"]
+]);
+
+// Column widths mirror the supplier sheets, matched by semantic column. DESIGNATION
+// and the COMMENTAIRE pair are hidden in the supplier files but kept visible here, so
+// they keep a readable width of their own.
+const CUT_COLUMN_WIDTHS = new Map([
+  [CUT_COLUMNS.designation, 30],
+  [CUT_COLUMNS.wireNumber, 3.44],
+  [CUT_COLUMNS.epi, 3.44],
+  [CUT_COLUMNS.section, 3.11],
+  [CUT_COLUMNS.color, 4.66],
+  [CUT_COLUMNS.cable, 20.78],
+  [CUT_COLUMNS.length, 10.78],
+  [CUT_COLUMNS.beginApp, 8.78],
+  [CUT_COLUMNS.beginPin, 4.78],
+  [CUT_COLUMNS.beginConnectionName, 20.78],
+  [CUT_COLUMNS.beginConnectionRef, 10.78],
+  [CUT_COLUMNS.beginSealName, 20.78],
+  [CUT_COLUMNS.beginSealRef, 10.78],
+  [CUT_COLUMNS.endApp, 10.78],
+  [CUT_COLUMNS.endPin, 4.78],
+  [CUT_COLUMNS.endConnectionName, 22.78],
+  [CUT_COLUMNS.endConnectionRef, 10.78],
+  [CUT_COLUMNS.endSealName, 20.78],
+  [CUT_COLUMNS.endSealRef, 10.78],
+  [CUT_COLUMNS.twist, 5.44],
+  [CUT_COLUMNS.comment, 18],
+  [CUT_COLUMNS.commentEnd, 18]
+]);
+
+// Supplier cut sheets vary the font size per column: SECT and COULEUR are set in a
+// smaller 6pt, while CABLE and LONG use a larger 10pt. Every other column keeps the
+// default 8pt applied by makeDataCellFont / styleCutHeaderCell.
+const CUT_COLUMN_FONT_SIZES = new Map([
+  [CUT_COLUMNS.section, 6],
+  [CUT_COLUMNS.color, 6],
+  [CUT_COLUMNS.cable, 10],
+  [CUT_COLUMNS.length, 10]
+]);
+
 const WIRE_EXPORT_REQUIRED_COLUMNS = ["Name", "Technical ID", "Color", "Begin ID", "Begin pin", "End ID", "End pin", "Section (mm²)", "Length (mm)"];
 
 const WIRE_EXPORT_COLUMN_ALIASES = new Map([
@@ -184,6 +285,39 @@ function formatSectionKey(sectionMm2) {
 
 function makeCableKey(sectionMm2, colorCode) {
   return `${formatSectionKey(sectionMm2)}|${colorCode}`;
+}
+
+function stripDiacritics(value) {
+  return normalizeText(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function deriveHarnessName(sheetName, sourceFile = "") {
+  const sheetBase = stripDiacritics(sheetName)
+    .replace(/\bWires?\b/gi, "")
+    .replace(/\bwire-list\b/gi, "")
+    .replace(/[_\s-]+$/g, "")
+    .trim();
+  const fallbackBase = stripDiacritics(path.basename(sourceFile, path.extname(sourceFile)))
+    .replace(/^wire-list[-_\s]*/i, "")
+    .replace(/[-_\s]*\d{4}[-_]\d{2}[-_]\d{2}.*$/i, "")
+    .trim();
+  const base = sheetBase.length > 0 ? sheetBase : fallbackBase;
+  const normalized = base
+    .replace(/[^A-Za-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toUpperCase();
+  return normalized.length > 0 ? normalized : "FAISCEAU";
+}
+
+function collectWireSpliceIds(wire) {
+  return [
+    normalizeText(wire["Begin ID"]),
+    normalizeText(wire["End ID"])
+  ].filter((endpointId) => isSpliceEndpoint(endpointId));
+}
+
+function formatEpiValue(wire) {
+  return [...new Set(collectWireSpliceIds(wire))].join(" / ");
 }
 
 function parseAmipiDesignation(designation) {
@@ -477,6 +611,12 @@ function unmergeColumnRanges(worksheet, startColumn, endColumn) {
   }
 }
 
+function unmergeAllRanges(worksheet) {
+  for (const range of [...(worksheet.model.merges ?? [])]) {
+    worksheet.unMergeCells(range);
+  }
+}
+
 function unmergeAccessoryRanges(worksheet) {
   for (const range of [...(worksheet.model.merges ?? [])]) {
     const parsed = parseCellRange(range);
@@ -599,6 +739,7 @@ async function readFdcPreferences(ExcelJS, filePath) {
   const preferences = {};
   const conflicts = [];
   const rows = [];
+  const frequencyByKey = new Map();
 
   for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber += 1) {
     const row = worksheet.getRow(rowNumber);
@@ -610,6 +751,9 @@ async function readFdcPreferences(ExcelJS, filePath) {
     }
     const colorCode = color.colorCode;
     const key = makeCableKey(sectionMm2, colorCode);
+    const references = frequencyByKey.get(key) ?? new Map();
+    references.set(reference, (references.get(reference) ?? 0) + 1);
+    frequencyByKey.set(key, references);
     if (preferences[key] !== undefined && preferences[key] !== reference) {
       conflicts.push({ key, previousReference: preferences[key], nextReference: reference, rowNumber });
       continue;
@@ -626,7 +770,24 @@ async function readFdcPreferences(ExcelJS, filePath) {
     });
   }
 
-  return { preferences, conflicts, rows };
+  const frequencyPreferences = {};
+  const frequencyRows = [];
+  for (const [key, references] of frequencyByKey) {
+    const ranked = [...references.entries()]
+      .map(([reference, count]) => ({ reference, count }))
+      .sort((first, second) => second.count - first.count || first.reference.localeCompare(second.reference));
+    const selected = ranked[0];
+    frequencyPreferences[key] = selected.reference;
+    frequencyRows.push({
+      key,
+      reference: selected.reference,
+      count: selected.count,
+      alternatives: ranked.slice(1)
+    });
+  }
+
+  frequencyRows.sort((first, second) => first.key.localeCompare(second.key, undefined, { numeric: true }));
+  return { preferences, conflicts, rows, frequencyPreferences, frequencyRows };
 }
 
 function buildResolver(catalog, fdcPreferences) {
@@ -642,16 +803,29 @@ function buildResolver(catalog, fdcPreferences) {
   function resolve(sectionMm2, colorCode) {
     const key = makeCableKey(sectionMm2, colorCode);
     const matches = byKey.get(key) ?? [];
+    const explicitReference = fdcPreferences.explicitPreferences?.[key];
+    const expectedFrequencyReference = fdcPreferences.expectedFrequencyPreferences?.[key];
     const priorityReference = fdcPreferences.priorityPreferences?.[key];
     const preferredReference = fdcPreferences.preferences[key];
 
-    if (priorityReference !== undefined) {
-      const priorityCable = byReference.get(priorityReference);
+    if (explicitReference !== undefined) {
+      const explicitCable = byReference.get(explicitReference);
       return {
-        status: priorityCable === undefined ? "priority-reference-not-in-catalog" : "resolved-by-priority-cable",
+        status: explicitCable === undefined ? "explicit-reference-not-in-catalog" : "resolved-by-explicit-preference",
         key,
-        reference: priorityReference,
-        cable: priorityCable ?? null,
+        reference: explicitReference,
+        cable: explicitCable ?? null,
+        candidates: matches
+      };
+    }
+
+    if (expectedFrequencyReference !== undefined) {
+      const expectedFrequencyCable = byReference.get(expectedFrequencyReference);
+      return {
+        status: expectedFrequencyCable === undefined ? "expected-frequency-reference-not-in-catalog" : "resolved-by-expected-frequency",
+        key,
+        reference: expectedFrequencyReference,
+        cable: expectedFrequencyCable ?? null,
         candidates: matches
       };
     }
@@ -663,6 +837,17 @@ function buildResolver(catalog, fdcPreferences) {
         key,
         reference: preferredReference,
         cable: preferredCable ?? null,
+        candidates: matches
+      };
+    }
+
+    if (priorityReference !== undefined) {
+      const priorityCable = byReference.get(priorityReference);
+      return {
+        status: priorityCable === undefined ? "priority-reference-not-in-catalog" : "resolved-by-priority-cable",
+        key,
+        reference: priorityReference,
+        cable: priorityCable ?? null,
         candidates: matches
       };
     }
@@ -947,6 +1132,20 @@ function excelTwistGroupValue(value) {
   return label;
 }
 
+function calculateAfterTwistDistanceMm(lengthMm) {
+  if (!Number.isFinite(lengthMm) || lengthMm <= 0) {
+    return null;
+  }
+  return Math.round(lengthMm / TWIST_LENGTH_FACTOR);
+}
+
+function formatTwistComment(lengthMm) {
+  const afterTwistDistanceMm = calculateAfterTwistDistanceMm(lengthMm);
+  return afterTwistDistanceMm === null
+    ? ""
+    : `Apres torsade: ${afterTwistDistanceMm} mm (pas ${TWIST_PITCH_MM} mm)`;
+}
+
 function makeCalibriFont(sourceFont = {}) {
   return {
     ...sourceFont,
@@ -987,19 +1186,19 @@ function applyAccessoryBandStyle(row, column, fill) {
 }
 
 function applyAccessoryStyles(row, accessoryStyles) {
-  for (let column = 7; column <= 12; column += 1) {
+  for (let column = CUT_COLUMNS.beginApp; column <= CUT_COLUMNS.beginSealRef; column += 1) {
     applyAccessoryBandStyle(row, column, accessoryStyles.beginFill);
   }
-  for (let column = 13; column <= 18; column += 1) {
+  for (let column = CUT_COLUMNS.endApp; column <= CUT_COLUMNS.endSealRef; column += 1) {
     applyAccessoryBandStyle(row, column, accessoryStyles.endFill);
   }
 }
 
 function applyEmptyPairHatches(row, accessoryStyles) {
-  applyPairHatchIfEmpty(row, 9, 10);
-  applyPairHatchIfEmpty(row, 11, 12);
-  applyPairHatchIfEmpty(row, 15, 16);
-  applyPairHatchIfEmpty(row, 17, 18);
+  applyPairHatchIfEmpty(row, CUT_COLUMNS.beginConnectionName, CUT_COLUMNS.beginConnectionRef);
+  applyPairHatchIfEmpty(row, CUT_COLUMNS.beginSealName, CUT_COLUMNS.beginSealRef);
+  applyPairHatchIfEmpty(row, CUT_COLUMNS.endConnectionName, CUT_COLUMNS.endConnectionRef);
+  applyPairHatchIfEmpty(row, CUT_COLUMNS.endSealName, CUT_COLUMNS.endSealRef);
 }
 
 function setCellBorderSide(cell, side, border) {
@@ -1012,42 +1211,52 @@ function setCellBorderSide(cell, side, border) {
 function applyCutSheetEndpointSeparator(worksheet) {
   for (let rowNumber = 1; rowNumber <= worksheet.rowCount; rowNumber += 1) {
     const row = worksheet.getRow(rowNumber);
-    setCellBorderSide(row.getCell(13), "right", FDC_CELL_BORDER);
-    setCellBorderSide(row.getCell(14), "left", FDC_CELL_BORDER);
+    setCellBorderSide(row.getCell(CUT_COLUMNS.beginSealRef), "right", FDC_CELL_BORDER);
+    setCellBorderSide(row.getCell(CUT_COLUMNS.endApp), "left", FDC_CELL_BORDER);
   }
 }
 
 function applyCutSheetDataFont(worksheet) {
-  for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber += 1) {
+  for (let rowNumber = CUT_DATA_START_ROW; rowNumber <= worksheet.rowCount; rowNumber += 1) {
     const row = worksheet.getRow(rowNumber);
-    for (let column = 1; column <= 21; column += 1) {
+    for (let column = 1; column <= CUT_COLUMN_COUNT; column += 1) {
       const cell = row.getCell(column);
-      cell.font = makeDataCellFont(cell.font ?? {});
+      styleCutDataCell(cell);
     }
   }
 }
 
-function fillEndpointAccessoryCells(row, startColumn, isSplice, connection, seal) {
+function fillEndpointAccessoryCells(row, columns, isSplice, connection, seal) {
+  const allColumns = [
+    columns.connectionName,
+    columns.connectionRef,
+    ...(columns.supplierContactRef === undefined ? [] : [columns.supplierContactRef]),
+    columns.sealName,
+    columns.sealRef
+  ];
   if (isSplice) {
-    for (let column = startColumn; column <= startColumn + 3; column += 1) {
+    for (const column of allColumns) {
       const cell = row.getCell(column);
       cell.value = null;
       cell.font = makeSpliceFont(cell.font ?? {});
       cell.alignment = { ...(cell.alignment ?? {}), horizontal: "center", vertical: "middle" };
     }
-    row.getCell(startColumn).value = SPLICE_ACCESSORY_LABEL;
+    row.getCell(columns.connectionName).value = SPLICE_ACCESSORY_LABEL;
     try {
-      row.worksheet.mergeCells(row.number, startColumn, row.number, startColumn + 3);
+      row.worksheet.mergeCells(row.number, allColumns[0], row.number, allColumns[allColumns.length - 1]);
     } catch (error) {
-      throw new Error(`Unable to merge splice cells row ${row.number}, columns ${startColumn}-${startColumn + 3} on worksheet '${row.worksheet.name}': ${error instanceof Error ? error.message : error}`);
+      throw new Error(`Unable to merge splice cells row ${row.number}, columns ${allColumns[0]}-${allColumns[allColumns.length - 1]} on worksheet '${row.worksheet.name}': ${error instanceof Error ? error.message : error}`);
     }
     return;
   }
 
-  row.getCell(startColumn).value = excelCellValue(connection.name);
-  row.getCell(startColumn + 1).value = excelCellValue(connection.reference);
-  row.getCell(startColumn + 2).value = excelCellValue(seal.name);
-  row.getCell(startColumn + 3).value = excelCellValue(seal.reference);
+  row.getCell(columns.connectionName).value = excelCellValue(connection.name);
+  row.getCell(columns.connectionRef).value = excelCellValue(connection.reference);
+  if (columns.supplierContactRef !== undefined) {
+    row.getCell(columns.supplierContactRef).value = "";
+  }
+  row.getCell(columns.sealName).value = excelCellValue(seal.name);
+  row.getCell(columns.sealRef).value = excelCellValue(seal.reference);
 }
 
 function fillFdcRow(row, wireNumber, resolution, accessoryStyles) {
@@ -1061,23 +1270,34 @@ function fillFdcRow(row, wireNumber, resolution, accessoryStyles) {
   const twistValue = excelTwistGroupValue(wire["Twist group"]);
   const twistLabel = normalizeText(twistValue);
 
-  row.getCell(1).value = wire.Name;
-  row.getCell(2).value = parseTechnicalIdWireNumber(wire["Technical ID"]) ?? wireNumber;
-  row.getCell(3).value = resolution.sectionMm2;
+  row.getCell(CUT_COLUMNS.designation).value = wire.Name;
+  row.getCell(CUT_COLUMNS.wireNumber).value = parseTechnicalIdWireNumber(wire["Technical ID"]) ?? wireNumber;
+  row.getCell(CUT_COLUMNS.epi).value = (resolution.epiValues ?? []).join(" / ");
+  row.getCell(CUT_COLUMNS.section).value = resolution.sectionMm2;
   const colorDisplay = resolution.color.ok ? formatFdcColor(resolution.color.colorCode) : resolution.color.raw;
-  row.getCell(4).value = colorDisplay;
-  applyFdcColorCellStyle(row.getCell(4), colorDisplay);
-  row.getCell(5).value = excelCellValue(resolution.cableReference ?? "");
-  row.getCell(6).value = parseNumber(wire["Length (mm)"]) ?? wire["Length (mm)"];
-  row.getCell(7).value = wire["Begin ID"];
-  row.getCell(8).value = excelCellValue(normalizePin(wire["Begin pin"]));
+  row.getCell(CUT_COLUMNS.color).value = colorDisplay;
+  applyFdcColorCellStyle(row.getCell(CUT_COLUMNS.color), colorDisplay);
+  row.getCell(CUT_COLUMNS.cable).value = excelCellValue(resolution.cableReference ?? "");
+  row.getCell(CUT_COLUMNS.length).value = parseNumber(wire["Length (mm)"]) ?? wire["Length (mm)"];
+  row.getCell(CUT_COLUMNS.beginApp).value = wire["Begin ID"];
+  row.getCell(CUT_COLUMNS.beginPin).value = excelCellValue(normalizePin(wire["Begin pin"]));
   applyAccessoryStyles(row, accessoryStyles);
-  fillEndpointAccessoryCells(row, 9, beginIsSplice, beginConnection, beginSeal);
-  row.getCell(13).value = wire["End ID"];
-  row.getCell(14).value = excelCellValue(normalizePin(wire["End pin"]));
-  fillEndpointAccessoryCells(row, 15, endIsSplice, endConnection, endSeal);
+  fillEndpointAccessoryCells(row, {
+    connectionName: CUT_COLUMNS.beginConnectionName,
+    connectionRef: CUT_COLUMNS.beginConnectionRef,
+    sealName: CUT_COLUMNS.beginSealName,
+    sealRef: CUT_COLUMNS.beginSealRef
+  }, beginIsSplice, beginConnection, beginSeal);
+  row.getCell(CUT_COLUMNS.endApp).value = wire["End ID"];
+  row.getCell(CUT_COLUMNS.endPin).value = excelCellValue(normalizePin(wire["End pin"]));
+  fillEndpointAccessoryCells(row, {
+    connectionName: CUT_COLUMNS.endConnectionName,
+    connectionRef: CUT_COLUMNS.endConnectionRef,
+    sealName: CUT_COLUMNS.endSealName,
+    sealRef: CUT_COLUMNS.endSealRef
+  }, endIsSplice, endConnection, endSeal);
   applyEmptyPairHatches(row, accessoryStyles);
-  const twistCell = row.getCell(19);
+  const twistCell = row.getCell(CUT_COLUMNS.twist);
   twistCell.value = twistValue;
   clearTextPrefixMetadata(twistCell);
   if (twistLabel.length > 0) {
@@ -1085,9 +1305,19 @@ function fillFdcRow(row, wireNumber, resolution, accessoryStyles) {
   } else {
     clearCellFill(twistCell);
   }
-  row.getCell(20).value = resolution.status === "resolved" ? "" : `UNRESOLVED: ${resolution.reason}`;
-  row.getCell(21).value = resolution.normalizedKey ?? "";
-  for (let column = 1; column <= 21; column += 1) {
+  const commentParts = [];
+  if (resolution.status !== "resolved") {
+    commentParts.push(`UNRESOLVED: ${resolution.reason}`);
+  }
+  if (twistLabel.length > 0) {
+    const twistComment = formatTwistComment(parseNumber(wire["Length (mm)"]));
+    if (twistComment.length > 0) {
+      commentParts.push(twistComment);
+    }
+  }
+  row.getCell(CUT_COLUMNS.comment).value = commentParts.join(" | ");
+  row.getCell(CUT_COLUMNS.commentEnd).value = row.getCell(CUT_COLUMNS.comment).value;
+  for (let column = 1; column <= CUT_COLUMN_COUNT; column += 1) {
     const cell = row.getCell(column);
     cell.font = makeDataCellFont(cell.font ?? {});
   }
@@ -1168,61 +1398,253 @@ function copyWorksheetTemplate(workbook, sourceWorksheet, name) {
   return worksheet;
 }
 
-function prepareCutSheetWorksheet(worksheet) {
-  worksheet.spliceColumns(19, 1);
-  unmergeAccessoryRanges(worksheet);
-  const designationWidth = (worksheet.getColumn(1).width ?? 0) + (worksheet.getColumn(2).width ?? 0);
-  unmergeColumnRanges(worksheet, 1, 2);
-  worksheet.spliceColumns(2, 1);
-  if (designationWidth > 0) {
-    worksheet.getColumn(1).width = designationWidth;
+function mergeIfPossible(worksheet, startRow, startColumn, endRow, endColumn) {
+  try {
+    worksheet.mergeCells(startRow, startColumn, endRow, endColumn);
+  } catch {
+    // The caller may be rebuilding a row that already carries compatible merges.
   }
-  unmergeColumnRanges(worksheet, 14, 15);
-  worksheet.spliceColumns(15, 1);
-  worksheet.getColumn(13).width = worksheet.getColumn(7).width;
-  worksheet.getColumn(14).width = worksheet.getColumn(8).width;
-  worksheet.getRow(1).getCell(21).value = "Section / couleur plan";
 }
 
-function clearAndFillCutSheetWorksheet(worksheet, resolutions) {
+function styleCutHeaderCell(cell) {
+  // Supplier column headers are white Calibri bold on a uniform dark-blue fill. We
+  // set the fill explicitly here so every header cell matches (the template left the
+  // FIL column without it).
+  cell.font = { ...makeCalibriFont(cell.font ?? {}), bold: true, color: { argb: "FFFFFFFF" } };
+  cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+  cell.border = cloneJson(EPISSURE_TABLE_BORDER);
+  cell.fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF155F82" }
+  };
+}
+
+// The supplier sheets use Times New Roman (not Calibri) for the EXTREMITE 1 / 2
+// band that spans each endpoint group, with no fill and a top/left medium border
+// plus a thin light-blue underline, so mirror that here.
+const CUT_GROUP_HEADER_BORDER = {
+  top: { style: "medium" },
+  left: { style: "medium" },
+  bottom: { style: "thin", color: { argb: "FF44B3E0" } }
+};
+
+function styleCutGroupHeaderCell(cell) {
+  cell.font = {
+    ...(cell.font ?? {}),
+    name: "Times New Roman",
+    family: 1,
+    size: 10,
+    bold: true,
+    color: { argb: "FF000000" }
+  };
+  cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+  cell.border = cloneJson(CUT_GROUP_HEADER_BORDER);
+  clearCellFill(cell);
+}
+
+function styleCutTitleCell(cell) {
+  cell.font = {
+    ...(cell.font ?? {}),
+    name: "Times New Roman",
+    family: 1,
+    size: 10,
+    bold: true,
+    color: { argb: "FF000000" }
+  };
+  cell.alignment = { horizontal: "left", vertical: "top" };
+  cell.border = {};
+  clearCellFill(cell);
+}
+
+function styleCutDataCell(cell) {
+  const isSpliceAccessoryCell = cell.value === SPLICE_ACCESSORY_LABEL
+    || (cell.isMerged === true && cell.master?.value === SPLICE_ACCESSORY_LABEL);
+  cell.font = isSpliceAccessoryCell
+    ? makeSpliceFont(cell.font ?? {})
+    : makeDataCellFont(cell.font ?? {});
+  // Preserve any horizontal alignment already set (e.g. centered PREDEN splice cells)
+  // while enforcing the shared vertical alignment and wrapping.
+  cell.alignment = { ...(cell.alignment ?? {}), vertical: "middle", wrapText: true };
+  cell.border = cloneJson(EPISSURE_TABLE_BORDER);
+}
+
+function applyCutColumnLayout(worksheet) {
+  for (const [column, width] of CUT_COLUMN_WIDTHS) {
+    worksheet.getColumn(column).width = width;
+  }
+}
+
+// Override the per-column font size on the column-header row and every data row so
+// SECT/COULEUR/CABLE/LONG match the supplier's sizing while preserving each cell's
+// existing font (Calibri, bold flag, colour, fills).
+function applyCutColumnFontSizes(worksheet) {
+  for (const [column, size] of CUT_COLUMN_FONT_SIZES) {
+    for (let rowNumber = CUT_HEADER_ROW; rowNumber <= worksheet.rowCount; rowNumber += 1) {
+      const cell = worksheet.getRow(rowNumber).getCell(column);
+      cell.font = { ...(cell.font ?? {}), size };
+    }
+  }
+}
+
+function applyGeneratedRowHeight(worksheet, endRow) {
+  for (let rowNumber = 1; rowNumber <= endRow; rowNumber += 1) {
+    worksheet.getRow(rowNumber).height = GENERATED_ROW_HEIGHT;
+  }
+}
+
+function trimWorksheetModel(worksheet, maxRow, maxColumn) {
+  // ExcelJS keeps trailing styled template rows/columns in its internal model even
+  // after spliceRows/spliceColumns removes values. Trim those generated tail objects
+  // so the written XLSX dimension matches the actual cut sheet.
+  if (Array.isArray(worksheet._rows) && worksheet._rows.length > maxRow) {
+    worksheet._rows.length = maxRow;
+  }
+  for (const row of worksheet._rows ?? []) {
+    if (row !== undefined && Array.isArray(row._cells) && row._cells.length > maxColumn) {
+      row._cells.length = maxColumn;
+    }
+  }
+  if (Array.isArray(worksheet._columns) && worksheet._columns.length > maxColumn) {
+    worksheet._columns.length = maxColumn;
+  }
+}
+
+function prepareCutSheetWorksheet(worksheet) {
+  const sourceHeaderRow = worksheet.getRow(1);
+  const sourceDataRow = worksheet.getRow(2);
+
+  unmergeAllRanges(worksheet);
+  if (worksheet.columnCount > CUT_COLUMN_COUNT) {
+    worksheet.spliceColumns(CUT_COLUMN_COUNT + 1, worksheet.columnCount - CUT_COLUMN_COUNT);
+  }
+  copyRowStyle(sourceDataRow, worksheet.getRow(CUT_DATA_START_ROW));
+  copyRowStyle(sourceHeaderRow, worksheet.getRow(CUT_BLANK_ROW));
+  copyRowStyle(sourceHeaderRow, worksheet.getRow(CUT_HARNESS_TITLE_ROW));
+  copyRowStyle(sourceHeaderRow, worksheet.getRow(CUT_GROUP_HEADER_ROW));
+  copyRowStyle(sourceHeaderRow, worksheet.getRow(CUT_HEADER_ROW));
+
+  applyCutColumnLayout(worksheet);
+
+  // Open at the supplier's default zoom (115%) instead of the template's 175%.
+  worksheet.views = (worksheet.views ?? [{}]).map((view) => ({
+    ...view,
+    zoomScale: 115,
+    zoomScaleNormal: 115
+  }));
+
+  const blankRow = worksheet.getRow(CUT_BLANK_ROW);
+  blankRow.height = GENERATED_ROW_HEIGHT;
+  for (let column = 1; column <= CUT_COLUMN_COUNT; column += 1) {
+    const cell = blankRow.getCell(column);
+    cell.value = "";
+    cell.border = {};
+    clearCellFill(cell);
+  }
+
+  const titleRow = worksheet.getRow(CUT_HARNESS_TITLE_ROW);
+  titleRow.height = GENERATED_ROW_HEIGHT;
+  for (let column = 1; column <= CUT_COLUMN_COUNT; column += 1) {
+    const cell = titleRow.getCell(column);
+    cell.value = "";
+    cell.border = {};
+    clearCellFill(cell);
+  }
+  // The harness name sits in F2 and overflows into the empty cells to its right.
+  styleCutTitleCell(titleRow.getCell(CUT_HARNESS_TITLE_COLUMN));
+
+  const groupRow = worksheet.getRow(CUT_GROUP_HEADER_ROW);
+  groupRow.height = GENERATED_ROW_HEIGHT;
+  for (let column = 1; column <= CUT_COLUMN_COUNT; column += 1) {
+    groupRow.getCell(column).value = "";
+    styleCutGroupHeaderCell(groupRow.getCell(column));
+  }
+  for (let column = 1; column < CUT_COLUMNS.beginApp; column += 1) {
+    groupRow.getCell(column).border = {};
+  }
+  groupRow.getCell(CUT_COLUMNS.beginApp).value = "EXTREMITE 1";
+  groupRow.getCell(CUT_COLUMNS.endApp).value = "EXTREMITE 2";
+  groupRow.getCell(CUT_COLUMNS.twist).value = "SUIVI";
+  mergeIfPossible(worksheet, CUT_GROUP_HEADER_ROW, CUT_COLUMNS.beginApp, CUT_GROUP_HEADER_ROW, CUT_COLUMNS.beginSealRef);
+  mergeIfPossible(worksheet, CUT_GROUP_HEADER_ROW, CUT_COLUMNS.endApp, CUT_GROUP_HEADER_ROW, CUT_COLUMNS.endSealRef);
+  mergeIfPossible(worksheet, CUT_GROUP_HEADER_ROW, CUT_COLUMNS.twist, CUT_GROUP_HEADER_ROW, CUT_COLUMNS.commentEnd);
+
+  const headerRow = worksheet.getRow(CUT_HEADER_ROW);
+  headerRow.height = GENERATED_ROW_HEIGHT;
+  for (let column = 1; column <= CUT_COLUMN_COUNT; column += 1) {
+    const cell = headerRow.getCell(column);
+    cell.value = CUT_HEADERS.get(column) ?? "";
+    styleCutHeaderCell(cell);
+  }
+  mergeIfPossible(worksheet, CUT_HEADER_ROW, CUT_COLUMNS.comment, CUT_HEADER_ROW, CUT_COLUMNS.commentEnd);
+}
+
+function clearAndFillCutSheetWorksheet(worksheet, resolutions, harnessName) {
   const sortedResolutions = [...resolutions].sort(compareResolutionsByTechnicalId);
-  const templateStyleRow = worksheet.getRow(2);
+  const templateStyleRow = worksheet.getRow(CUT_DATA_START_ROW);
   const accessoryStyles = {
-    beginFill: cloneCellFill(templateStyleRow.getCell(7)),
-    endFill: cloneCellFill(templateStyleRow.getCell(13))
+    beginFill: cloneCellFill(templateStyleRow.getCell(CUT_COLUMNS.beginApp)),
+    endFill: cloneCellFill(templateStyleRow.getCell(CUT_COLUMNS.endApp))
   };
   const rowsToWrite = sortedResolutions.length;
-  const existingDataRows = Math.max(0, worksheet.rowCount - 1);
+  const existingDataRows = Math.max(0, worksheet.rowCount - CUT_DATA_START_ROW + 1);
 
-  for (let rowNumber = 2; rowNumber <= Math.max(worksheet.rowCount, rowsToWrite + 1); rowNumber += 1) {
+  worksheet.getRow(CUT_HARNESS_TITLE_ROW).getCell(CUT_HARNESS_TITLE_COLUMN).value = harnessName;
+
+  for (const range of [...(worksheet.model.merges ?? [])]) {
+    const parsed = parseCellRange(range);
+    if (parsed !== null && parsed.startRow >= CUT_DATA_START_ROW) {
+      worksheet.unMergeCells(range);
+    }
+  }
+
+  for (let rowNumber = CUT_DATA_START_ROW; rowNumber <= Math.max(worksheet.rowCount, rowsToWrite + CUT_DATA_START_ROW - 1); rowNumber += 1) {
     const row = worksheet.getRow(rowNumber);
-    if (rowNumber > 2) {
+    if (rowNumber > CUT_DATA_START_ROW) {
       copyRowStyle(templateStyleRow, row);
     }
-    for (let column = 1; column <= 21; column += 1) {
+    row.height = GENERATED_ROW_HEIGHT;
+    for (let column = 1; column <= CUT_COLUMN_COUNT; column += 1) {
       row.getCell(column).value = null;
     }
-    clearCellFill(row.getCell(19));
+    clearCellFill(row.getCell(CUT_COLUMNS.twist));
   }
 
   sortedResolutions.forEach((resolution, index) => {
-    const row = worksheet.getRow(index + 2);
+    const row = worksheet.getRow(index + CUT_DATA_START_ROW);
     if (index > 0 || existingDataRows === 0) {
       copyRowStyle(templateStyleRow, row);
     }
     // Same value as the FIL column, reused by the epissure worksheet so both sheets
     // reference the wire by an identical number.
     resolution.displayWireNumber = parseTechnicalIdWireNumber(resolution.wire["Technical ID"]) ?? (index + 1);
+    resolution.epiValues = [];
+  });
+  assignSpliceOutputTokens(sortedResolutions);
+
+  sortedResolutions.forEach((resolution, index) => {
+    const row = worksheet.getRow(index + CUT_DATA_START_ROW);
+    if (index > 0 || existingDataRows === 0) {
+      copyRowStyle(templateStyleRow, row);
+    }
     fillFdcRow(row, index + 1, resolution, accessoryStyles);
+    mergeIfPossible(worksheet, row.number, CUT_COLUMNS.comment, row.number, CUT_COLUMNS.commentEnd);
     row.commit();
   });
+  const lastDataRow = rowsToWrite + CUT_DATA_START_ROW - 1;
+  if (worksheet.rowCount > lastDataRow) {
+    worksheet.spliceRows(lastDataRow + 1, worksheet.rowCount - lastDataRow);
+  }
   applyCutSheetEndpointSeparator(worksheet);
   applyCutSheetDataFont(worksheet);
+  applyCutColumnFontSizes(worksheet);
 
   worksheet.autoFilter = {
-    from: "A1",
-    to: { row: 1, column: 21 }
+    from: { row: CUT_HEADER_ROW, column: 1 },
+    to: { row: CUT_HEADER_ROW, column: CUT_COLUMN_COUNT }
   };
+  applyGeneratedRowHeight(worksheet, lastDataRow);
+  trimWorksheetModel(worksheet, lastDataRow, CUT_COLUMN_COUNT);
 }
 
 function getWireLabel(wire) {
@@ -1267,7 +1689,13 @@ function spliceWireEntry(resolution) {
     ?? parseTechnicalIdWireNumber(wire["Technical ID"])
     ?? getWireLabel(wire);
   const twistGroup = normalizeTwistGroupLabel(wire["Twist group"]);
-  return { number, twisted: twistGroup.length > 0, twistGroup };
+  return {
+    number,
+    twisted: twistGroup.length > 0,
+    twistGroup,
+    sectionMm2: resolution.sectionMm2,
+    resolution
+  };
 }
 
 function addSpliceWire(splices, spliceId, side, entry) {
@@ -1278,9 +1706,15 @@ function addSpliceWire(splices, spliceId, side, entry) {
   const splice = splices.get(normalizedSpliceId) ?? {
     id: normalizedSpliceId,
     left: [],
-    right: []
+    right: [],
+    totalSectionMm2: 0
   };
-  splice[side].push(entry);
+  const tokenSuffix = side === "right" ? "Y" : "$";
+  const sideEntry = { ...entry, side, tokenSuffix };
+  splice[side].push(sideEntry);
+  if (Number.isFinite(sideEntry.sectionMm2)) {
+    splice.totalSectionMm2 += sideEntry.sectionMm2;
+  }
   splices.set(normalizedSpliceId, splice);
 }
 
@@ -1322,6 +1756,35 @@ function collectSpliceTables(resolutions) {
   }
   const tables = [...splices.values()].sort((first, second) => first.id.localeCompare(second.id));
   return { tables, sideFlags };
+}
+
+function spliceSleeveReference(totalSectionMm2) {
+  return totalSectionMm2 >= 4 ? "911594" : "911586";
+}
+
+function finalizeSpliceOutputTokens(tables, { updateResolutions = false } = {}) {
+  for (const splice of tables) {
+    for (const [, entries] of [["left", splice.left], ["right", splice.right]]) {
+      entries.forEach((entry, index) => {
+        const position = index + 1;
+        const token = `${position}${entry.tokenSuffix}`;
+        entry.epiToken = token;
+        entry.pageToken = `${entry.number}*${token}`;
+        if (updateResolutions && entry.resolution !== undefined) {
+          const epiValues = entry.resolution.epiValues ?? [];
+          epiValues.push(token);
+          entry.resolution.epiValues = epiValues;
+        }
+      });
+    }
+    splice.sleeveReference = spliceSleeveReference(splice.totalSectionMm2);
+  }
+  return tables;
+}
+
+function assignSpliceOutputTokens(resolutions) {
+  const { tables } = collectSpliceTables(resolutions);
+  return finalizeSpliceOutputTokens(tables, { updateResolutions: true });
 }
 
 const EPISSURE_TABLE_BORDER = {
@@ -1406,18 +1869,34 @@ function fillEpissureCenterCell(row) {
   centerCell.fill = cloneJson(EPISSURE_CENTER_FILL);
 }
 
-function writeEpissureWireCell(cell, entry) {
+function writeEpissureWireCell(cell, entry, position) {
   if (entry === undefined) {
     cell.value = "";
     return;
   }
-  cell.value = entry.twisted ? `${entry.number} (${entry.twistGroup})` : entry.number;
+  cell.value = entry.pageToken ?? `${entry.number}*${position}${entry.tokenSuffix}`;
   if (entry.twisted) {
     cell.font = { ...makeCalibriFont(cell.font ?? {}), italic: true, bold: true };
   }
 }
 
-function writeEpissureWorksheet(workbook, cutSheetName, resolutions) {
+function collectTwistedPairPhrases(resolutions) {
+  const byGroup = new Map();
+  for (const resolution of resolutions) {
+    const twistGroup = normalizeTwistGroupLabel(resolution.wire["Twist group"]);
+    if (twistGroup.length === 0) {
+      continue;
+    }
+    const wires = byGroup.get(twistGroup) ?? [];
+    wires.push(resolution.displayWireNumber ?? parseTechnicalIdWireNumber(resolution.wire["Technical ID"]) ?? getWireLabel(resolution.wire));
+    byGroup.set(twistGroup, wires);
+  }
+  return [...byGroup.values()]
+    .filter((wires) => wires.length >= 2)
+    .map((wires) => `Fils ${wires.join(" et ")} torsadés ensemble`);
+}
+
+function writeEpissureWorksheet(workbook, cutSheetName, resolutions, harnessName) {
   const worksheet = workbook.addWorksheet(makeUniqueWorksheetName(workbook, `${cutSheetName} Epissures`));
   worksheet.columns = [
     { width: 2 },
@@ -1430,9 +1909,17 @@ function writeEpissureWorksheet(workbook, cutSheetName, resolutions) {
     { width: 4 }
   ];
 
-  const { tables: spliceTables, sideFlags } = collectSpliceTables(resolutions);
+  const { tables, sideFlags } = collectSpliceTables(resolutions);
+  const spliceTables = finalizeSpliceOutputTokens(tables);
   const connectorCurves = [];
-  let rowNumber = 2;
+  const suffixDiagnostics = [];
+  worksheet.mergeCells(1, EPISSURE_TABLE_START_COLUMN, 1, EPISSURE_TABLE_END_COLUMN);
+  const harnessCell = worksheet.getRow(1).getCell(EPISSURE_TABLE_START_COLUMN);
+  harnessCell.value = harnessName;
+  harnessCell.font = { ...makeCalibriFont(harnessCell.font ?? {}), bold: true };
+  harnessCell.alignment = { horizontal: "center", vertical: "middle" };
+
+  let rowNumber = 3;
   for (const splice of spliceTables) {
     const tableStartRowNumber = rowNumber;
     const spliceTwisted = [...splice.left, ...splice.right].some((entry) => entry.twisted);
@@ -1454,11 +1941,19 @@ function writeEpissureWorksheet(workbook, cutSheetName, resolutions) {
       row.getCell(EPISSURE_LEFT_NUMBER_COLUMN).value = leftWire === undefined ? "" : index + 1;
       row.getCell(EPISSURE_RIGHT_NUMBER_COLUMN).value = rightWire === undefined ? "" : index + 1;
       styleEpissureTableRow(row);
-      writeEpissureWireCell(row.getCell(EPISSURE_LEFT_WIRE_COLUMN), leftWire);
-      writeEpissureWireCell(row.getCell(EPISSURE_RIGHT_WIRE_COLUMN), rightWire);
+      writeEpissureWireCell(row.getCell(EPISSURE_LEFT_WIRE_COLUMN), leftWire, index + 1);
+      writeEpissureWireCell(row.getCell(EPISSURE_RIGHT_WIRE_COLUMN), rightWire, index + 1);
       row.getCell(EPISSURE_LEFT_NUMBER_COLUMN).alignment = { horizontal: "center", vertical: "middle" };
       row.getCell(EPISSURE_RIGHT_NUMBER_COLUMN).alignment = { horizontal: "center", vertical: "middle" };
       if (leftWire !== undefined) {
+        suffixDiagnostics.push({
+          spliceId: splice.id,
+          side: "left",
+          wireNumber: leftWire.number,
+          position: index + 1,
+          suffix: leftWire.tokenSuffix,
+          reason: "left-table-column-dollar"
+        });
         connectorCurves.push({
           rowNumber: row.number,
           side: "left",
@@ -1466,6 +1961,14 @@ function writeEpissureWorksheet(workbook, cutSheetName, resolutions) {
         });
       }
       if (rightWire !== undefined) {
+        suffixDiagnostics.push({
+          spliceId: splice.id,
+          side: "right",
+          wireNumber: rightWire.number,
+          position: index + 1,
+          suffix: rightWire.tokenSuffix,
+          reason: "right-table-column-y"
+        });
         connectorCurves.push({
           rowNumber: row.number,
           side: "right",
@@ -1477,10 +1980,33 @@ function writeEpissureWorksheet(workbook, cutSheetName, resolutions) {
       }
     }
 
-    applyEpissureOuterBorder(worksheet, tableStartRowNumber, rowNumber + rowCount);
-    rowNumber += rowCount + 3;
+    const sleeveRow = worksheet.getRow(rowNumber + rowCount + 1);
+    styleEpissureTableRow(sleeveRow);
+    worksheet.mergeCells(sleeveRow.number, EPISSURE_LEFT_SPACER_COLUMN, sleeveRow.number, EPISSURE_RIGHT_SPACER_COLUMN);
+    const sleeveCell = sleeveRow.getCell(EPISSURE_LEFT_SPACER_COLUMN);
+    sleeveCell.value = splice.sleeveReference;
+    sleeveCell.font = { ...makeCalibriFont(sleeveCell.font ?? {}), bold: true };
+    sleeveCell.alignment = { horizontal: "center", vertical: "middle" };
+
+    applyEpissureOuterBorder(worksheet, tableStartRowNumber, sleeveRow.number);
+    rowNumber += rowCount + 4;
   }
-  return { worksheet, connectorCurves, sideFlags };
+
+  const twistedPhrases = collectTwistedPairPhrases(resolutions);
+  if (twistedPhrases.length > 0) {
+    rowNumber += 1;
+    for (const phrase of twistedPhrases) {
+      const row = worksheet.getRow(rowNumber);
+      worksheet.mergeCells(rowNumber, EPISSURE_TABLE_START_COLUMN, rowNumber, EPISSURE_TABLE_END_COLUMN);
+      const cell = row.getCell(EPISSURE_TABLE_START_COLUMN);
+      cell.value = phrase;
+      cell.font = { ...makeCalibriFont(cell.font ?? {}), bold: true };
+      cell.alignment = { horizontal: "center", vertical: "middle" };
+      rowNumber += 1;
+    }
+  }
+  applyGeneratedRowHeight(worksheet, worksheet.rowCount);
+  return { worksheet, connectorCurves, sideFlags, suffixDiagnostics };
 }
 
 function escapeXmlAttribute(value) {
@@ -1719,14 +2245,15 @@ async function writeCutSheetWorkbook(ExcelJS, templatePath, outputPath, sheetRes
         : worksheet.name;
       worksheet.name = uniqueName;
     }
-    return { worksheet, resolutions: sheet.resolutions };
+    return { worksheet, resolutions: sheet.resolutions, harnessName: sheet.harnessName };
   });
 
   const epissureDrawingPlans = [];
   const spliceSideFlags = [];
-  outputWorksheets.forEach(({ worksheet, resolutions }) => {
-    clearAndFillCutSheetWorksheet(worksheet, resolutions);
-    const epissures = writeEpissureWorksheet(workbook, worksheet.name, resolutions);
+  const epissureTokenDiagnostics = [];
+  outputWorksheets.forEach(({ worksheet, resolutions, harnessName }) => {
+    clearAndFillCutSheetWorksheet(worksheet, resolutions, harnessName);
+    const epissures = writeEpissureWorksheet(workbook, worksheet.name, resolutions, harnessName);
     epissureDrawingPlans.push({
       worksheetName: epissures.worksheet.name,
       connectorCurves: epissures.connectorCurves
@@ -1734,25 +2261,32 @@ async function writeCutSheetWorkbook(ExcelJS, templatePath, outputPath, sheetRes
     for (const flag of epissures.sideFlags) {
       spliceSideFlags.push({ ...flag, cutSheet: worksheet.name });
     }
+    for (const diagnostic of epissures.suffixDiagnostics) {
+      epissureTokenDiagnostics.push({ ...diagnostic, cutSheet: worksheet.name });
+    }
   });
   ensureDirectory(path.dirname(outputPath));
   await workbook.xlsx.writeFile(outputPath);
   await patchEpissureCurveDrawings(outputPath, epissureDrawingPlans);
-  return { spliceSideFlags };
+  return { spliceSideFlags, epissureTokenDiagnostics };
 }
 
 async function buildCatalogArtifact(ExcelJS) {
   const catalog = await readAmipiCatalog(ExcelJS, DEFAULTS.amipiWorkbook);
   const fdcPreferences = await readFdcPreferences(ExcelJS, DEFAULTS.templateWorkbook);
+  const explicitPreferences = {};
   for (const [key, reference] of MANUAL_CABLE_PREFERENCES) {
-    fdcPreferences.preferences[key] = reference;
+    explicitPreferences[key] = reference;
   }
   const priorityCablePreferences = buildPriorityCablePreferences(catalog);
-  for (const [key, reference] of Object.entries(priorityCablePreferences.preferences)) {
-    fdcPreferences.preferences[key] = reference;
-  }
   const catalogReferences = new Set(catalog.cables.map((cable) => cable.reference));
-  const preferredReferenceIssues = Object.entries(fdcPreferences.preferences)
+  const allPreferredReferences = {
+    ...fdcPreferences.preferences,
+    ...fdcPreferences.frequencyPreferences,
+    ...priorityCablePreferences.preferences,
+    ...explicitPreferences
+  };
+  const preferredReferenceIssues = Object.entries(allPreferredReferences)
     .filter(([, reference]) => !catalogReferences.has(reference))
     .map(([key, reference]) => ({ key, reference, reason: "reference-not-found-in-amipi-catalog" }));
 
@@ -1771,14 +2305,19 @@ async function buildCatalogArtifact(ExcelJS) {
       totalKeys: catalog.keyStats.totalKeys,
       ambiguousKeys: catalog.keyStats.ambiguousKeys,
       fdcPreferenceKeys: Object.keys(fdcPreferences.preferences).length,
+      expectedFrequencyPreferenceKeys: Object.keys(fdcPreferences.frequencyPreferences).length,
+      explicitPreferenceKeys: Object.keys(explicitPreferences).length,
       fdcPreferenceConflicts: fdcPreferences.conflicts.length,
       priorityCableKeys: Object.keys(priorityCablePreferences.preferences).length,
       preferredReferenceIssues: preferredReferenceIssues.length
     },
     cables: catalog.cables,
     preferences: fdcPreferences.preferences,
+    expectedFrequencyPreferences: fdcPreferences.frequencyPreferences,
+    explicitPreferences,
     priorityCablePreferences: priorityCablePreferences.preferences,
     fdcPreferenceRows: fdcPreferences.rows,
+    expectedFrequencyPreferenceRows: fdcPreferences.frequencyRows,
     priorityCablePreferenceRows: priorityCablePreferences.rows,
     ambiguities: catalog.ambiguities,
     issues: {
@@ -1801,6 +2340,8 @@ async function buildCutSheets(ExcelJS, catalogArtifact) {
     },
     {
       preferences: catalogArtifact.preferences,
+      expectedFrequencyPreferences: catalogArtifact.expectedFrequencyPreferences ?? {},
+      explicitPreferences: catalogArtifact.explicitPreferences ?? {},
       priorityPreferences: catalogArtifact.priorityCablePreferences ?? {}
     }
   );
@@ -1813,12 +2354,13 @@ async function buildCutSheets(ExcelJS, catalogArtifact) {
     const exportData = await readWireExport(ExcelJS, filePath);
     const sheetResolutions = exportData.sheets.map((sheet) => ({
       name: sheet.name,
+      harnessName: deriveHarnessName(sheet.name, filePath),
       resolutions: resolveWireRows(filePath, sheet.name, sheet.rows, resolver)
     }));
     const resolutions = sheetResolutions.flatMap((sheet) => sheet.resolutions);
     const baseName = path.basename(filePath, path.extname(filePath));
     const outputPath = path.join(DEFAULTS.outputDirectory, `Fdc_generated_${baseName}.xlsx`);
-    const { spliceSideFlags } = await writeCutSheetWorkbook(ExcelJS, DEFAULTS.templateWorkbook, outputPath, sheetResolutions);
+    const { spliceSideFlags, epissureTokenDiagnostics } = await writeCutSheetWorkbook(ExcelJS, DEFAULTS.templateWorkbook, outputPath, sheetResolutions);
     if (spliceSideFlags.length > 0) {
       console.warn(`${path.basename(filePath)}: ${spliceSideFlags.length} splice endpoint(s) without an L/R pin, placed by fallback side. See report 'spliceSideFlags'.`);
     }
@@ -1827,8 +2369,15 @@ async function buildCutSheets(ExcelJS, catalogArtifact) {
       outputFile: outputPath,
       summary: summarizeResolutions(resolutions),
       spliceSideFlags,
+      epissureTokenRule: {
+        status: "derived-from-local-table-placement",
+        dollar: "wire token is placed on the left side of the generated splice table",
+        y: "wire token is placed on the right side of the generated splice table"
+      },
+      epissureTokenDiagnostics,
       sheets: sheetResolutions.map((sheet) => ({
         name: sheet.name,
+        harnessName: sheet.harnessName,
         summary: summarizeResolutions(sheet.resolutions),
         unresolvedRows: sheet.resolutions
           .filter((resolution) => resolution.status !== "resolved")
