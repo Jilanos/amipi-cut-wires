@@ -107,7 +107,7 @@ const CUT_DATA_START_ROW = 5;
 const CUT_COLUMN_COUNT = 22;
 const GENERATED_ROW_HEIGHT = 12.9;
 const TWIST_PITCH_MM = 13;
-const TWIST_LENGTH_FACTOR = 1.075;
+const WIRE_EXPORT_UNTWISTED_LENGTH_COLUMN = "Untwisted length (mm)";
 
 const CUT_COLUMNS = {
   designation: 1,
@@ -899,6 +899,7 @@ async function readWireExportXlsx(ExcelJS, filePath) {
     }
 
     const headerIndex = buildHeaderIndex(headers);
+    const spliceNamesById = readEntitySpliceNames(worksheet, headerIndex);
     const rows = [];
     for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber += 1) {
       const row = worksheet.getRow(rowNumber);
@@ -909,10 +910,34 @@ async function readWireExportXlsx(ExcelJS, filePath) {
       rows.push(Object.fromEntries(values));
     }
 
-    sheets.push({ name: worksheet.name, headers, headerIndex, rows });
+    sheets.push({ name: worksheet.name, headers, headerIndex, rows, spliceNamesById });
   }
 
   return { sheets };
+}
+
+function readEntitySpliceNames(worksheet, headerIndex) {
+  const entityTypeColumn = headerIndex.get("Entity type");
+  const entityIdColumn = headerIndex.get("Entity ID");
+  const entityNameColumn = headerIndex.get("Entity name");
+  const spliceNamesById = {};
+  if (entityTypeColumn === undefined || entityIdColumn === undefined || entityNameColumn === undefined) {
+    return spliceNamesById;
+  }
+
+  for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber += 1) {
+    const row = worksheet.getRow(rowNumber);
+    const entityType = normalizeText(row.getCell(entityTypeColumn + 1).value);
+    if (entityType.toLowerCase() !== "splice") {
+      continue;
+    }
+    const entityId = normalizeText(row.getCell(entityIdColumn + 1).value);
+    const entityName = normalizeText(row.getCell(entityNameColumn + 1).value);
+    if (entityId.length > 0 && entityName.length > 0) {
+      spliceNamesById[entityId] = entityName;
+    }
+  }
+  return spliceNamesById;
 }
 
 async function readWireExportCsv(filePath) {
@@ -929,7 +954,8 @@ async function readWireExportCsv(filePath) {
         name: path.basename(filePath, path.extname(filePath)),
         headers,
         headerIndex,
-        rows: rows.slice(1).map((row) => Object.fromEntries(headers.map((header, index) => [header, normalizeText(row[index] ?? "")])))
+        rows: rows.slice(1).map((row) => Object.fromEntries(headers.map((header, index) => [header, normalizeText(row[index] ?? "")]))),
+        spliceNamesById: {}
       }
     ]
   };
@@ -959,6 +985,7 @@ async function readWireExport(ExcelJS, filePath) {
     for (const column of WIRE_EXPORT_REQUIRED_COLUMNS) {
       requireColumn(sheet.headerIndex, column, `${filePath}:${sheet.name}`);
     }
+    sheet.rows = sheet.rows.filter((row) => WIRE_EXPORT_REQUIRED_COLUMNS.some((column) => normalizeText(row[column]).length > 0));
   }
   return parsed;
 }
@@ -1132,18 +1159,19 @@ function excelTwistGroupValue(value) {
   return label;
 }
 
-function calculateAfterTwistDistanceMm(lengthMm) {
-  if (!Number.isFinite(lengthMm) || lengthMm <= 0) {
-    return null;
+function formatTwistComment(untwistedLengthMm) {
+  if (!Number.isFinite(untwistedLengthMm) || untwistedLengthMm <= 0) {
+    return "";
   }
-  return Math.round(lengthMm / TWIST_LENGTH_FACTOR);
+  return `Apres torsade: ${Math.round(untwistedLengthMm)} mm (pas ${TWIST_PITCH_MM} mm)`;
 }
 
-function formatTwistComment(lengthMm) {
-  const afterTwistDistanceMm = calculateAfterTwistDistanceMm(lengthMm);
-  return afterTwistDistanceMm === null
-    ? ""
-    : `Apres torsade: ${afterTwistDistanceMm} mm (pas ${TWIST_PITCH_MM} mm)`;
+function readUntwistedLengthMm(wire) {
+  const untwistedLengthMm = parseNumber(wire[WIRE_EXPORT_UNTWISTED_LENGTH_COLUMN]);
+  if (untwistedLengthMm === null) {
+    return null;
+  }
+  return untwistedLengthMm;
 }
 
 function makeCalibriFont(sourceFont = {}) {
@@ -1310,7 +1338,7 @@ function fillFdcRow(row, wireNumber, resolution, accessoryStyles) {
     commentParts.push(`UNRESOLVED: ${resolution.reason}`);
   }
   if (twistLabel.length > 0) {
-    const twistComment = formatTwistComment(parseNumber(wire["Length (mm)"]));
+    const twistComment = formatTwistComment(readUntwistedLengthMm(wire));
     if (twistComment.length > 0) {
       commentParts.push(twistComment);
     }
@@ -1718,7 +1746,13 @@ function addSpliceWire(splices, spliceId, side, entry) {
   splices.set(normalizedSpliceId, splice);
 }
 
-function collectSpliceTables(resolutions) {
+function spliceDisplayTitle(splice) {
+  const title = splice.name === undefined ? splice.id : `${splice.id} - ${splice.name}`;
+  const twisted = [...splice.left, ...splice.right].some((entry) => entry.twisted);
+  return twisted ? `${title} (torsadé)` : title;
+}
+
+function collectSpliceTables(resolutions, spliceNamesById = {}) {
   const splices = new Map();
   const sideFlags = [];
   for (const resolution of resolutions) {
@@ -1754,7 +1788,12 @@ function collectSpliceTables(resolutions) {
       addSpliceWire(splices, endpoint.id, side, entry);
     }
   }
-  const tables = [...splices.values()].sort((first, second) => first.id.localeCompare(second.id));
+  const tables = [...splices.values()]
+    .map((splice) => ({
+      ...splice,
+      name: spliceNamesById[splice.id]
+    }))
+    .sort((first, second) => first.id.localeCompare(second.id));
   return { tables, sideFlags };
 }
 
@@ -1896,7 +1935,7 @@ function collectTwistedPairPhrases(resolutions) {
     .map((wires) => `Fils ${wires.join(" et ")} torsadés ensemble`);
 }
 
-function writeEpissureWorksheet(workbook, cutSheetName, resolutions, harnessName) {
+function writeEpissureWorksheet(workbook, cutSheetName, resolutions, harnessName, spliceNamesById = {}) {
   const worksheet = workbook.addWorksheet(makeUniqueWorksheetName(workbook, `${cutSheetName} Epissures`));
   worksheet.columns = [
     { width: 2 },
@@ -1909,7 +1948,7 @@ function writeEpissureWorksheet(workbook, cutSheetName, resolutions, harnessName
     { width: 4 }
   ];
 
-  const { tables, sideFlags } = collectSpliceTables(resolutions);
+  const { tables, sideFlags } = collectSpliceTables(resolutions, spliceNamesById);
   const spliceTables = finalizeSpliceOutputTokens(tables);
   const connectorCurves = [];
   const suffixDiagnostics = [];
@@ -1922,11 +1961,10 @@ function writeEpissureWorksheet(workbook, cutSheetName, resolutions, harnessName
   let rowNumber = 3;
   for (const splice of spliceTables) {
     const tableStartRowNumber = rowNumber;
-    const spliceTwisted = [...splice.left, ...splice.right].some((entry) => entry.twisted);
     const titleRow = worksheet.getRow(rowNumber);
     worksheet.mergeCells(rowNumber, EPISSURE_TABLE_START_COLUMN, rowNumber, EPISSURE_TABLE_END_COLUMN);
     const titleCell = titleRow.getCell(EPISSURE_TABLE_START_COLUMN);
-    titleCell.value = spliceTwisted ? `${splice.id} (torsadé)` : splice.id;
+    titleCell.value = spliceDisplayTitle(splice);
     styleEpissureTableRow(titleRow);
     titleCell.font = { ...makeCalibriFont(titleCell.font ?? {}), bold: true };
     titleCell.alignment = { horizontal: "center", vertical: "middle" };
@@ -2245,15 +2283,15 @@ async function writeCutSheetWorkbook(ExcelJS, templatePath, outputPath, sheetRes
         : worksheet.name;
       worksheet.name = uniqueName;
     }
-    return { worksheet, resolutions: sheet.resolutions, harnessName: sheet.harnessName };
+    return { worksheet, resolutions: sheet.resolutions, harnessName: sheet.harnessName, spliceNamesById: sheet.spliceNamesById ?? {} };
   });
 
   const epissureDrawingPlans = [];
   const spliceSideFlags = [];
   const epissureTokenDiagnostics = [];
-  outputWorksheets.forEach(({ worksheet, resolutions, harnessName }) => {
+  outputWorksheets.forEach(({ worksheet, resolutions, harnessName, spliceNamesById }) => {
     clearAndFillCutSheetWorksheet(worksheet, resolutions, harnessName);
-    const epissures = writeEpissureWorksheet(workbook, worksheet.name, resolutions, harnessName);
+    const epissures = writeEpissureWorksheet(workbook, worksheet.name, resolutions, harnessName, spliceNamesById);
     epissureDrawingPlans.push({
       worksheetName: epissures.worksheet.name,
       connectorCurves: epissures.connectorCurves
@@ -2355,6 +2393,7 @@ async function buildCutSheets(ExcelJS, catalogArtifact) {
     const sheetResolutions = exportData.sheets.map((sheet) => ({
       name: sheet.name,
       harnessName: deriveHarnessName(sheet.name, filePath),
+      spliceNamesById: sheet.spliceNamesById ?? {},
       resolutions: resolveWireRows(filePath, sheet.name, sheet.rows, resolver)
     }));
     const resolutions = sheetResolutions.flatMap((sheet) => sheet.resolutions);
@@ -2378,6 +2417,7 @@ async function buildCutSheets(ExcelJS, catalogArtifact) {
       sheets: sheetResolutions.map((sheet) => ({
         name: sheet.name,
         harnessName: sheet.harnessName,
+        spliceNamesById: sheet.spliceNamesById,
         summary: summarizeResolutions(sheet.resolutions),
         unresolvedRows: sheet.resolutions
           .filter((resolution) => resolution.status !== "resolved")

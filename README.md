@@ -120,6 +120,7 @@ Colonnes attendues :
 Colonnes accessoires utilisees si presentes :
 
 - `Twist group`
+- `Untwisted length (mm)` : longueur courte apres torsade, utilisee directement dans le commentaire des fils torsades
 - `Begin connection ref`
 - `Begin connection name`
 - `Begin seal ref`
@@ -128,6 +129,8 @@ Colonnes accessoires utilisees si presentes :
 - `End connection name`
 - `End seal ref`
 - `End seal name`
+
+Les exports `.xlsx` peuvent aussi contenir, a partir de la colonne `AA`, un tableau d'entites avec les colonnes `Entity type`, `Entity ID`, `Entity name` et `Internal ID`. Les lignes `Entity type = Splice` sont utilisees pour associer chaque ID d'epissure a son nom dans les onglets d'epissures generes. Les lignes de ce tableau qui ne contiennent pas de donnees fil sont ignorees par le parseur.
 
 ## Sorties
 
@@ -165,7 +168,7 @@ Chaque onglet de coupe a aussi un onglet associe `<nom-onglet> Epissures`. Ces o
 - une reference de manchon est ajoutee sous chaque tableau d'epissure : `911594` si la section totale de l'epissure est `>= 4 mm²`, sinon `911586` ;
 - les groupes de torsade sont rappeles en phrases de type `Fils 9 et 10 torsadés ensemble` ;
 - un fil torsade (colonne `Twist group` non vide) est affiche en gras italique ; le titre de l'epissure correspondante est suffixe ` (torsadé)` ;
-- pour les fils torsades, la colonne `COMMENTAIRE` indique la distance apres torsade avec un pas de `13 mm`. La formule utilisee est `L_apres = round(L_export / 1.075)` ;
+- pour les fils torsades, la colonne `COMMENTAIRE` indique la distance apres torsade avec un pas de `13 mm`, lue directement depuis `Untwisted length (mm)` ;
 - les fils d'une meme epissure sont regroupes sous un titre fusionne, centre et en gras ;
 - la case du titre de l'epissure a un fond gris 15% ;
 - chaque tableau d'epissure a une bordure exterieure epaisse ;
